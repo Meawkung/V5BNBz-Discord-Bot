@@ -72,8 +72,8 @@ async def on_voice_state_update(member, before, after):
         if after.channel is not None and after.channel.id in monitored_voice_channel_ids:
             # User joined a monitored voice channel
             if before.channel is None:
-                log_message = f'{human_readable_timestamp} ⬆️ {nickname} joined {after.channel.name} from being disconnected'
-                embed_description = f'<t:{unix_timestamp}:F> ⬆️ {member.mention} joined {after.channel.name} from being disconnected'
+                log_message = f'{human_readable_timestamp} ⬆️ {nickname} joined {after.channel.name}'
+                embed_description = f'<t:{unix_timestamp}:F> ⬆️ {member.mention} joined {after.channel.name}'
                 embed_color = discord.Color.green()
             else:
                 log_message = f'{human_readable_timestamp} ⬆️ {nickname} moved to {after.channel.name}'
