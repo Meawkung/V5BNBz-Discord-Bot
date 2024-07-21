@@ -73,11 +73,11 @@ async def on_voice_state_update(member, before, after):
             # User joined a monitored voice channel
             if before.channel is None:
                 log_message = f'{human_readable_timestamp} ⬆️ {nickname} joined {after.channel.name} from being disconnected'
-                embed_description = f'<t:{unix_timestamp}:F> {member.mention} joined {after.channel.name} from being disconnected'
+                embed_description = f'<t:{unix_timestamp}:F> ⬆️ {member.mention} joined {after.channel.name} from being disconnected'
                 embed_color = discord.Color.green()
             else:
                 log_message = f'{human_readable_timestamp} ⬆️ {nickname} moved to {after.channel.name}'
-                embed_description = f'<t:{unix_timestamp}:F> {member.mention} moved to {after.channel.name}'
+                embed_description = f'<t:{unix_timestamp}:F> ⬆️ {member.mention} moved to {after.channel.name}'
                 embed_color = discord.Color.from_rgb(148, 0, 211)  # Violet color
             
             print(log_message)
@@ -105,11 +105,11 @@ async def on_voice_state_update(member, before, after):
             # User left a monitored voice channel
             if after.channel is None:
                 log_message = f'{human_readable_timestamp} ⬇️ {nickname} left {before.channel.name} and disconnected'
-                embed_description = f'<t:{unix_timestamp}:F> {member.mention} left {before.channel.name} and disconnected'
+                embed_description = f'<t:{unix_timestamp}:F> ⬇️ {member.mention} left {before.channel.name} and disconnected'
                 embed_color = discord.Color.red()
             else:
                 log_message = f'{human_readable_timestamp} ⬇️ {nickname} moved to {after.channel.name}'
-                embed_description = f'<t:{unix_timestamp}:F> {member.mention} moved to {after.channel.name}'
+                embed_description = f'<t:{unix_timestamp}:F> ⬇️ {member.mention} moved to {after.channel.name}'
                 embed_color = discord.Color.from_rgb(148, 0, 211)  # Violet color
             
             print(log_message)
