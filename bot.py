@@ -17,7 +17,7 @@ intents.voice_states = True  # Enable the voice state intent
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # List of voice channel IDs to monitor
-monitored_voice_channel_ids = [1251996192699711599]  #  #OVERRUN Voice Channel ID
+monitored_voice_channel_ids = [1250561983305224222,1135925419753869312,1251996192699711599]  #  #GLMain, #GLSub, Overun
 
 # List of text channel IDs where notifications will be sent
 notification_text_channel_ids = [1264562975851810847]  # Replace with your text channel IDs
@@ -36,21 +36,21 @@ def get_current_date():
     """Return current date as a string."""
     return datetime.now().strftime('%Y-%m-%d')
 
-def get_log_folder():
+def get_log_folder(channel_name):
     """Return the path to the log folder, creating it if it doesn't exist."""
-    log_folder = os.path.join('logged', get_current_date())
+    log_folder = os.path.join('logged', channel_name, get_current_date())
     if not os.path.exists(log_folder):
         os.makedirs(log_folder)
     return log_folder
 
-def get_log_filename(log_type):
+def get_log_filename(channel_name, log_type):
     """Generate log file name based on the current date and log type."""
-    log_folder = get_log_folder()
+    log_folder = get_log_folder(channel_name)
     return os.path.join(log_folder, f'{log_type}_log_{get_current_date()}.txt')
 
-def get_combined_log_filename():
+def get_combined_log_filename(channel_name):
     """Generate combined log file name based on the current date."""
-    log_folder = get_log_folder()
+    log_folder = get_log_folder(channel_name)
     return os.path.join(log_folder, f'combined_log_{get_current_date()}.txt')
 
 @bot.event
@@ -72,23 +72,23 @@ async def on_voice_state_update(member, before, after):
         if after.channel is not None and after.channel.id in monitored_voice_channel_ids:
             # User joined a monitored voice channel
             if before.channel is None:
-                log_message = f'{human_readable_timestamp} ⬆️ {nickname} joined {after.channel.name}'
-                embed_description = f'<t:{unix_timestamp}:F> ⬆️ {member.mention} joined {after.channel.name}'
+                log_message = f'{human_readable_timestamp} 👋 {nickname} joined {after.channel.name}'
+                embed_description = f'<t:{unix_timestamp}:F> 👋 {member.mention} joined {after.channel.name}'
                 embed_color = discord.Color.green()
             else:
-                log_message = f'{human_readable_timestamp} ⬆️ {nickname} moved to {after.channel.name}'
-                embed_description = f'<t:{unix_timestamp}:F> ⬆️ {member.mention} moved to {after.channel.name}'
+                log_message = f'{human_readable_timestamp} 🛫 {nickname} moved from {before.channel} to channel {after.channel.name}'
+                embed_description = f'<t:{unix_timestamp}:F> 🛫 {member.mention} moved from {before.channel} to channel {after.channel.name}'
                 embed_color = discord.Color.from_rgb(148, 0, 211)  # Violet color
             
             print(log_message)
             
             # Log to individual files
-            join_log_filename = get_log_filename('join')
+            join_log_filename = get_log_filename(after.channel.name, 'join')
             with open(join_log_filename, 'a', encoding='utf-8') as f:
                 f.write(log_message + '\n')
 
             # Log to combined file
-            combined_log_filename = get_combined_log_filename()
+            combined_log_filename = get_combined_log_filename(after.channel.name)
             with open(combined_log_filename, 'a', encoding='utf-8') as f:
                 f.write(log_message + '\n')
 
@@ -104,23 +104,23 @@ async def on_voice_state_update(member, before, after):
         if before.channel is not None and before.channel.id in monitored_voice_channel_ids:
             # User left a monitored voice channel
             if after.channel is None:
-                log_message = f'{human_readable_timestamp} ⬇️ {nickname} left {before.channel.name} and disconnected'
-                embed_description = f'<t:{unix_timestamp}:F> ⬇️ {member.mention} left {before.channel.name} and disconnected'
+                log_message = f'{human_readable_timestamp} 🚪 {nickname} left {before.channel.name}'
+                embed_description = f'<t:{unix_timestamp}:F> 🚪 {member.mention} left {before.channel.name}'
                 embed_color = discord.Color.red()
             else:
-                log_message = f'{human_readable_timestamp} ⬇️ {nickname} moved to {after.channel.name}'
-                embed_description = f'<t:{unix_timestamp}:F> ⬇️ {member.mention} moved to {after.channel.name}'
+                log_message = f'{human_readable_timestamp} 🛫 {nickname} moved from {before.channel} to channel {after.channel.name}'
+                embed_description = f'<t:{unix_timestamp}:F> 🛫 {member.mention} moved from {before.channel} to channel {after.channel.name}'
                 embed_color = discord.Color.from_rgb(148, 0, 211)  # Violet color
             
             print(log_message)
             
             # Log to individual files
-            leave_log_filename = get_log_filename('leave')
+            leave_log_filename = get_log_filename(before.channel.name, 'leave')
             with open(leave_log_filename, 'a', encoding='utf-8') as f:
                 f.write(log_message + '\n')
 
             # Log to combined file
-            combined_log_filename = get_combined_log_filename()
+            combined_log_filename = get_combined_log_filename(before.channel.name)
             with open(combined_log_filename, 'a', encoding='utf-8') as f:
                 f.write(log_message + '\n')
 
