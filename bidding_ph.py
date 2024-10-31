@@ -264,7 +264,7 @@ async def setup_bidding_system(bot):
     )
 
     # Send the user guide to a specific channel
-    channel = bot.get_channel(1264562975851810847)  # Replace with your channel ID
+    channel = bot.get_channel(1288876995836510322)  # Replace with your channel ID
     if channel:
         await channel.send(user_guide)
 
