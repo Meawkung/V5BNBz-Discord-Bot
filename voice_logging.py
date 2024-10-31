@@ -4,12 +4,12 @@ from datetime import datetime, timezone, timedelta
 import discord
 
 # List of voice channel IDs to monitor
-# monitored_voice_channel_ids = [1250561983305224222,1135925419753869312,1251996192699711599]  #  #GLMain, #GLSub, Overun
-monitored_voice_channel_ids = [1264556505206882304,1264542777908265052,396983683124559876]  #  #Testing
+monitored_voice_channel_ids = [1250561983305224222,1135925419753869312,1251996192699711599]  #  #GLMain, #GLSub, Overun
+# monitored_voice_channel_ids = [1264556505206882304,1264542777908265052,396983683124559876]  #  #Testing
 
 # List of text channel IDs where notifications will be sent
-# notification_text_channel_ids = [1264562975851810847]  # Replace with your text channel IDs
-notification_text_channel_ids = [1264542344607436821] # Testing
+notification_text_channel_ids = [1264562975851810847]  # Replace with your text channel IDs
+# notification_text_channel_ids = [1264542344607436821] # Testing
 
 def get_unix_timestamp():
     """Return current Unix epoch timestamp."""
@@ -47,25 +47,26 @@ def setup_voice_logging(bot):
     async def on_voice_state_update(member, before, after):
         unix_timestamp = get_unix_timestamp()
         human_readable_timestamp = get_human_readable_timestamp(unix_timestamp)
-
+        
         # Improved nickname handling
         nickname = member.nick if member.nick else member.name
         display_name = f"{nickname} ({member.name})" if member.nick else member.name
-
-        print(f'Before channel: {before.channel}')
-        print(f'After channel: {after.channel}')
 
         if before.channel != after.channel:
             if after.channel is not None and after.channel.id in monitored_voice_channel_ids:
                 # User joined a monitored voice channel
                 if before.channel is None:
                     log_message = f'{human_readable_timestamp} 👋 {display_name} joined {after.channel.name}'
-                    embed_description = f'<t:{unix_timestamp}:F> 👋 {member.mention} joined {after.channel.name}'
+                    title = "Member Joined Voice Channel"
+                    description = f"👋 {member.mention} joined **{after.channel.name}**"
                     embed_color = discord.Color.green()
+                    footer_text = "Joined"
                 else:
                     log_message = f'{human_readable_timestamp} 🛫 {display_name} moved from {before.channel} to channel {after.channel.name}'
-                    embed_description = f'<t:{unix_timestamp}:F> 🛫 {member.mention} moved from {before.channel} to channel {after.channel.name}'
+                    title = "Member Moved Voice Channels"
+                    description = f"🛫 {member.mention} moved from **{before.channel}** to **{after.channel.name}**"
                     embed_color = discord.Color.from_rgb(148, 0, 211)
+                    footer_text = "Moved"
 
                 print(log_message)
 
@@ -79,8 +80,18 @@ def setup_voice_logging(bot):
                 with open(combined_log_filename, 'a', encoding='utf-8') as f:
                     f.write(log_message + '\n')
 
-                # Create embed message
-                embed = discord.Embed(description=embed_description, color=embed_color)
+                # Create enhanced embed
+                embed = discord.Embed(
+                    title=title,
+                    description=description,
+                    color=embed_color,
+                    timestamp=datetime.fromtimestamp(unix_timestamp)
+                )
+                embed.set_author(
+                    name=display_name,
+                    icon_url=member.display_avatar.url
+                )
+                embed.set_footer(text=footer_text)
 
                 # Send message to specified text channels
                 for channel_id in notification_text_channel_ids:
@@ -92,12 +103,16 @@ def setup_voice_logging(bot):
                 # User left a monitored voice channel
                 if after.channel is None:
                     log_message = f'{human_readable_timestamp} 🚪 {display_name} left {before.channel.name}'
-                    embed_description = f'<t:{unix_timestamp}:F> 🚪 {member.mention} left {before.channel.name}'
+                    title = "Member Left Voice Channel"
+                    description = f"🚪 {member.mention} left **{before.channel.name}**"
                     embed_color = discord.Color.red()
+                    footer_text = "Left"
                 else:
                     log_message = f'{human_readable_timestamp} 🛫 {display_name} moved from {before.channel} to channel {after.channel.name}'
-                    embed_description = f'<t:{unix_timestamp}:F> 🛫 {member.mention} moved from {before.channel} to channel {after.channel.name}'
+                    title = "Member Moved Voice Channels"
+                    description = f"🛫 {member.mention} moved from **{before.channel}** to **{after.channel.name}**"
                     embed_color = discord.Color.from_rgb(148, 0, 211)
+                    footer_text = "Moved"
 
                 print(log_message)
 
@@ -112,7 +127,17 @@ def setup_voice_logging(bot):
                     f.write(log_message + '\n')
 
                 # Create embed message
-                embed = discord.Embed(description=embed_description, color=embed_color)
+                embed = discord.Embed(
+                    title=title,
+                    description=description,
+                    color=embed_color,
+                    timestamp=datetime.fromtimestamp(unix_timestamp)
+                )
+                embed.set_author(
+                    name=display_name,
+                    icon_url=member.display_avatar.url
+                )
+                embed.set_footer(text=footer_text)
 
                 # Send message to specified text channels
                 for channel_id in notification_text_channel_ids:

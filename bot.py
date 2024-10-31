@@ -9,7 +9,7 @@ from voice_logging import setup_voice_logging
 load_dotenv()
 
 # Get the bot token from the environment variables
-BOT_TOKEN = os.getenv('DISCORD_TESTBOT_TOKEN')
+BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 
 # Set up the bot intents
 intents = discord.Intents.default()
