@@ -4,10 +4,12 @@ from datetime import datetime, timezone, timedelta
 import discord
 
 # List of voice channel IDs to monitor
-monitored_voice_channel_ids = [1250561983305224222,1135925419753869312,1251996192699711599]  #  #GLMain, #GLSub, Overun
+# monitored_voice_channel_ids = [1250561983305224222,1135925419753869312,1251996192699711599]  #  #GLMain, #GLSub, Overun
+monitored_voice_channel_ids = [1264556505206882304,1264542777908265052,396983683124559876]  #  #Testing
 
 # List of text channel IDs where notifications will be sent
-notification_text_channel_ids = [1264562975851810847]  # Replace with your text channel IDs
+# notification_text_channel_ids = [1264562975851810847]  # Replace with your text channel IDs
+notification_text_channel_ids = [1264542344607436821] # Testing
 
 def get_unix_timestamp():
     """Return current Unix epoch timestamp."""
@@ -45,10 +47,11 @@ def setup_voice_logging(bot):
     async def on_voice_state_update(member, before, after):
         unix_timestamp = get_unix_timestamp()
         human_readable_timestamp = get_human_readable_timestamp(unix_timestamp)
-        
-        # Retrieve the user's nickname or default to username
+
+        # Improved nickname handling
         nickname = member.nick if member.nick else member.name
-        
+        display_name = f"{nickname} ({member.name})" if member.nick else member.name
+
         print(f'Before channel: {before.channel}')
         print(f'After channel: {after.channel}')
 
@@ -56,16 +59,16 @@ def setup_voice_logging(bot):
             if after.channel is not None and after.channel.id in monitored_voice_channel_ids:
                 # User joined a monitored voice channel
                 if before.channel is None:
-                    log_message = f'{human_readable_timestamp} 👋 {nickname} joined {after.channel.name}'
+                    log_message = f'{human_readable_timestamp} 👋 {display_name} joined {after.channel.name}'
                     embed_description = f'<t:{unix_timestamp}:F> 👋 {member.mention} joined {after.channel.name}'
                     embed_color = discord.Color.green()
                 else:
-                    log_message = f'{human_readable_timestamp} 🛫 {nickname} moved from {before.channel} to channel {after.channel.name}'
+                    log_message = f'{human_readable_timestamp} 🛫 {display_name} moved from {before.channel} to channel {after.channel.name}'
                     embed_description = f'<t:{unix_timestamp}:F> 🛫 {member.mention} moved from {before.channel} to channel {after.channel.name}'
-                    embed_color = discord.Color.from_rgb(148, 0, 211)  # Violet color
-                
+                    embed_color = discord.Color.from_rgb(148, 0, 211)
+
                 print(log_message)
-                
+
                 # Log to individual files
                 join_log_filename = get_log_filename(after.channel.name, 'join')
                 with open(join_log_filename, 'a', encoding='utf-8') as f:
@@ -88,16 +91,16 @@ def setup_voice_logging(bot):
             if before.channel is not None and before.channel.id in monitored_voice_channel_ids:
                 # User left a monitored voice channel
                 if after.channel is None:
-                    log_message = f'{human_readable_timestamp} 🚪 {nickname} left {before.channel.name}'
+                    log_message = f'{human_readable_timestamp} 🚪 {display_name} left {before.channel.name}'
                     embed_description = f'<t:{unix_timestamp}:F> 🚪 {member.mention} left {before.channel.name}'
                     embed_color = discord.Color.red()
                 else:
-                    log_message = f'{human_readable_timestamp} 🛫 {nickname} moved from {before.channel} to channel {after.channel.name}'
+                    log_message = f'{human_readable_timestamp} 🛫 {display_name} moved from {before.channel} to channel {after.channel.name}'
                     embed_description = f'<t:{unix_timestamp}:F> 🛫 {member.mention} moved from {before.channel} to channel {after.channel.name}'
-                    embed_color = discord.Color.from_rgb(148, 0, 211)  # Violet color
-                
+                    embed_color = discord.Color.from_rgb(148, 0, 211)
+
                 print(log_message)
-                
+
                 # Log to individual files
                 leave_log_filename = get_log_filename(before.channel.name, 'leave')
                 with open(leave_log_filename, 'a', encoding='utf-8') as f:

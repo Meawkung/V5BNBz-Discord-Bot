@@ -1,6 +1,7 @@
 import discord
 from discord.ui import Button, View, Select
 import asyncio
+import time
 
 # Dictionary to store the quantity of bids for each card
 card_bids = {
@@ -26,23 +27,25 @@ class CardButton(Button):
     async def callback(self, interaction: discord.Interaction):
         user = interaction.user
         formatted_name = f"{user.mention} ({user.name})"
-
+        current_timestamp = int(time.time())  # Get current Unix timestamp
+        
         # Check if user already has a bid for this card
         existing_bid = next((bid for bid in card_bids[self.label] if bid.startswith(f"{user.mention}")), None)
-
+        
         if existing_bid:
             # User already bid, increase their quantity
-            quantity = int(existing_bid.split(" - ")[-1]) + 1
+            quantity = int(existing_bid.split(" - ")[1].split(" ")[0]) + 1
             card_bids[self.label].remove(existing_bid)  # Remove old bid
-            card_bids[self.label].append(f"{formatted_name} - {quantity}")  # Add updated bid
+            # Add updated bid with timestamp
+            card_bids[self.label].append(f"{formatted_name} - {quantity} <t:{current_timestamp}:f>")
         else:
             # New bid, starting quantity at 1
-            card_bids[self.label].append(f"{formatted_name} - 1")
+            card_bids[self.label].append(f"{formatted_name} - 1 <t:{current_timestamp}:f>")
             
-            # If it's the first bid for this card, add it to the order list
-            if self.label not in card_bid_order:
-                card_bid_order.append(self.label)
-
+        # If it's the first bid for this card, add it to the order list
+        if self.label not in card_bid_order:
+            card_bid_order.append(self.label)
+            
         await self.update_message(interaction)
 
     async def update_message(self, interaction: discord.Interaction):
@@ -261,7 +264,7 @@ async def setup_bidding_system(bot):
     )
 
     # Send the user guide to a specific channel
-    channel = bot.get_channel(1289231103521194137)  # Replace with your channel ID
+    channel = bot.get_channel(469091654536527872)  # Replace with your channel ID
     if channel:
         await channel.send(user_guide)
 
