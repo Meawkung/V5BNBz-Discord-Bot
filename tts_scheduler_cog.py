@@ -1,387 +1,488 @@
 # tts_scheduler_cog.py
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import asyncio
 import datetime
 from gtts import gTTS
 import os
 import logging
-from typing import Optional, List, Dict # Ensure Optional is imported
+import json # <<< สำหรับอ่านไฟล์ JSON
+from typing import Optional, List, Dict, Any
+from apscheduler.schedulers.asyncio import AsyncIOScheduler # <<< Import Scheduler
+from apscheduler.triggers.cron import CronTrigger         # <<< Import Cron Trigger
 
-# ตั้งค่า logger สำหรับ Cog นี้
 log = logging.getLogger(__name__)
 
-FFMPEG_PATH = os.getenv("FFMPEG_PATH") # Get path from .env
-# Optional: Check if path was found
-if not FFMPEG_PATH:
-    log.warning("FFMPEG_PATH not found in .env file. Relying on system PATH.")
-    # You could set FFMPEG_PATH = "ffmpeg" here to explicitly use the PATH default
-else:
-    log.info(f"Using FFmpeg path from environment variable: {FFMPEG_PATH}")
+# --- ค่าคงที่ ---
+TEMP_TTS_DIR = "temp_tts" # โฟลเดอร์เก็บไฟล์ TTS ชั่วคราว
+SCHEDULE_FILENAME = "tts_schedule.json" # ชื่อไฟล์ตารางเวลา
+DEFAULT_LANG = 'en' # ภาษาเริ่มต้นสำหรับ gTTS
 
-# ตั้งค่า path ชั่วคราวสำหรับไฟล์ TTS (ควรอยู่ใน directory ที่ bot มีสิทธิ์เขียน)
-TEMP_TTS_DIR = "temp_tts"
+# สร้าง directory ชั่วคราวถ้ายังไม่มี
 if not os.path.exists(TEMP_TTS_DIR):
     try:
         os.makedirs(TEMP_TTS_DIR)
         log.info(f"สร้าง directory ชั่วคราวสำหรับ TTS: {TEMP_TTS_DIR}")
     except OSError as e:
         log.error(f"ไม่สามารถสร้าง directory {TEMP_TTS_DIR}: {e}")
-        # อาจจะต้อง fallback ไปใช้ directory ปัจจุบัน หรือหยุดการทำงานถ้าจำเป็น
-        TEMP_TTS_DIR = "." # Fallback to current directory
+        TEMP_TTS_DIR = "." # Fallback ใช้ directory ปัจจุบัน
 
 class TextToSpeechSchedulerCog(commands.Cog):
+    """
+    A Cog that schedules Text-to-Speech announcements in a specific voice channel
+    based on a schedule loaded from a JSON file, using APScheduler.
+    Also provides a command to test TTS manually.
+    """
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # --- ตั้งค่าสำหรับ Scheduled Task ---
-        # ตั้งค่าโซนเวลา GMT+7
-        self.gmt7 = datetime.timezone(datetime.timedelta(hours=7))
-        # ตั้งเวลาที่ต้องการให้ประกาศ (ชั่วโมง, นาที, วินาที ใน GMT+7)
-        self.scheduled_time = datetime.time(21, 26, 00, tzinfo=self.gmt7)
-        # ID ของ Guild (Server) เป้าหมาย
+        # --- ตั้งค่า Timezone (สำคัญมาก!) ---
+        try:
+            # ตัวอย่าง GMT+7
+            self.default_timezone = datetime.timezone(datetime.timedelta(hours=7), name="GMT+7")
+            log.info(f"Using timezone: {self.default_timezone.tzname(None)}")
+        except Exception:
+            log.exception("Failed to create timezone object. Using system default (might be UTC).")
+            self.default_timezone = None # ใช้ค่า default ของ APScheduler (น่าจะเป็น UTC)
+
+        # --- ตั้งค่าเป้าหมาย (ควรตั้งจาก config หรือ env var ในอนาคต) ---
         self.target_guild_id = 719548826834436133       # <<< ใส่ Guild ID ของคุณ
-        # ID ของ Voice Channel เป้าหมาย
         self.target_voice_channel_id = 1280895030780887163 # <<< ใส่ Voice Channel ID ของคุณ
-        # ข้อความที่จะให้พูด
-        self.tts_message = "MOB in one minute" # <<< ข้อความของคุณ
-        # --- สถานะการทำงาน ---
-        self.is_playing = False # Flag ป้องกันการเล่นเสียงซ้อนกันจาก Task หลัก
-        self.current_voice_client = None # เก็บ voice client ที่ใช้งานอยู่ (สำหรับ task หลัก)
-        # เริ่ม task loop
-        self.tts_task_loop.start()
-        log.info("TTS Scheduler Cog initialized and task loop started.")
-        log.info(f"Scheduled time (GMT+7): {self.scheduled_time.strftime('%H:%M:%S')}")
-        log.info(f"Target Guild ID: {self.target_guild_id}")
-        log.info(f"Target Voice Channel ID: {self.target_voice_channel_id}")
+        self.ffmpeg_path = os.getenv("FFMPEG_PATH") # โหลด Path FFMPEG จาก .env
+
+        # --- สถานะภายใน ---
+        self.is_playing = False # Flag รวม ป้องกันการเล่นเสียงซ้อนจากทุก Job/Test
+        self.current_voice_client: Optional[discord.VoiceClient] = None
+        self.job_lock = asyncio.Lock() # Lock ป้องกัน race condition ตอน Job/Test ทำงานพร้อมกัน
+
+        # --- โหลดตารางเวลาจากไฟล์ ---
+        self.jobs_schedule_data = self._load_schedule_from_file()
+        if not self.jobs_schedule_data:
+            log.warning("ไม่สามารถโหลดตารางเวลาจากไฟล์ หรือไฟล์ว่างเปล่า. จะไม่มีการตั้งเวลา TTS อัตโนมัติ.")
+
+        # --- สร้างและเริ่ม Scheduler ---
+        try:
+            self.scheduler = AsyncIOScheduler(timezone=self.default_timezone)
+            # ตั้งค่า Job โดยใช้ข้อมูลที่โหลดมา
+            self._schedule_initial_jobs(self.jobs_schedule_data or []) # ส่ง list ว่างถ้าโหลดไม่ได้
+            self.scheduler.start()
+            log.info(f"APScheduler started with timezone: {self.scheduler.timezone}")
+        except Exception as e:
+            log.exception("Failed to initialize or start APScheduler!")
+            self.scheduler = None # ตั้งเป็น None ถ้า init ไม่สำเร็จ
+
+    def _load_schedule_from_file(self) -> Optional[List[Dict[str, Any]]]:
+        """โหลดตารางเวลา Job จากไฟล์ JSON"""
+        script_dir = os.path.dirname(__file__)
+        file_path = os.path.join(script_dir, SCHEDULE_FILENAME)
+        log.info(f"Attempting to load schedule from: {file_path}")
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                valid_jobs = []
+                for i, job_info in enumerate(data):
+                    if not isinstance(job_info, dict):
+                        log.warning(f"Schedule item at index {i} is not a dictionary, skipping.")
+                        continue
+                    job_id = job_info.get("id")
+                    message = job_info.get("message")
+                    if not job_id or not message:
+                        log.warning(f"Schedule item at index {i} (ID: {job_id}) is missing 'id' or 'message', skipping.")
+                        continue
+                    # Basic validation (can be expanded)
+                    if not isinstance(job_id, (str, int)):
+                        log.warning(f"Job '{job_id}' has an invalid ID type, skipping.")
+                        continue
+                    if not isinstance(message, str):
+                        log.warning(f"Job '{job_id}' has an invalid message type, skipping.")
+                        continue
+                    valid_jobs.append(job_info)
+
+                log.info(f"Successfully loaded {len(valid_jobs)} valid jobs from '{file_path}'.")
+                return valid_jobs
+            else:
+                log.error(f"Data in schedule file '{file_path}' is not a JSON list.")
+                return None
+        except FileNotFoundError:
+            log.error(f"Schedule file not found: '{file_path}'. Please create this file.")
+            return None
+        except json.JSONDecodeError as e:
+            log.error(f"Schedule file '{file_path}' contains invalid JSON: {e}")
+            return None
+        except Exception as e:
+            log.exception(f"An unexpected error occurred while loading schedule file '{file_path}': {e}")
+            return None
+
+    def _schedule_initial_jobs(self, jobs_data: List[Dict[str, Any]]):
+        """ตั้งค่า Jobs เริ่มต้นสำหรับ TTS จากข้อมูลที่โหลดมา"""
+        if not self.scheduler:
+            log.error("APScheduler is not available, cannot schedule jobs.")
+            return
+        if not jobs_data:
+            log.warning("No valid job data provided to schedule.")
+            return
+
+        scheduled_count = 0
+        for job_info in jobs_data:
+            job_id = str(job_info.get("id")) # Ensure ID is string
+            message = job_info.get("message")
+            lang = job_info.get("lang", DEFAULT_LANG) # Get language or use default
+
+            try:
+                trigger = CronTrigger(
+                    hour=job_info.get("hour", '*'),
+                    minute=job_info.get("minute", '*'),
+                    second=job_info.get("second", 0),
+                    day_of_week=job_info.get("days", '*'), # Day of week (mon-sun, 0-6)
+                    timezone=self.default_timezone # Use the scheduler's timezone
+                )
+                # Add job with args: job_id, message, lang
+                self.scheduler.add_job(
+                    self.run_tts_job,
+                    trigger=trigger,
+                    id=job_id,
+                    name=f"TTS-{job_id}",
+                    args=[job_id, message, lang], # Pass lang as arg
+                    replace_existing=True,
+                    misfire_grace_time=30
+                )
+                log.info(f"Scheduled job '{job_id}' (Lang: {lang}) with trigger: {trigger}")
+                scheduled_count += 1
+            except ValueError as ve:
+                 log.error(f"Invalid time/day format for job '{job_id}': {ve}. Skipping.")
+            except Exception as e:
+                log.exception(f"Failed to schedule job '{job_id}': {e}")
+        log.info(f"Scheduled a total of {scheduled_count} jobs.")
 
     def cog_unload(self):
         """Called when the Cog is unloaded."""
-        self.tts_task_loop.cancel()
-        log.info("TTS Scheduler task loop cancelled.")
-        # พยายาม disconnect ถ้ายังเชื่อมต่ออยู่ (จาก task หลัก)
-        if self.current_voice_client and self.current_voice_client.is_connected():
-            # การ disconnect อาจต้องทำใน async context, อาจจะยุ่งยากตอน unload
-            # อาจจะต้องใช้ asyncio.ensure_future หรือวิธีอื่น
-            log.warning("Bot is unloading, attempting to disconnect lingering voice client (may require manual check).")
-            # self.bot.loop.create_task(self.current_voice_client.disconnect(force=True)) # อาจไม่ทำงาน reliably ตอน unload
-
-    @tasks.loop(seconds=1) # ตรวจสอบทุก 1 วินาที (ปรับได้ตามความเหมาะสม)
-    async def tts_task_loop(self):
-        """Task loop to check the time and trigger TTS."""
-        # รอให้ bot พร้อมก่อนเริ่มทำงาน
-        await self.bot.wait_until_ready()
-
-        # ดึงเวลาปัจจุบันในโซน GMT+7
-        now_gmt7 = datetime.datetime.now(self.gmt7)
-        current_time = now_gmt7.time()
-
-        # เปรียบเทียบเฉพาะ ชั่วโมง นาที วินาที (ไม่สน microsecond)
-        target_hms = (self.scheduled_time.hour, self.scheduled_time.minute, self.scheduled_time.second)
-        current_hms = (current_time.hour, current_time.minute, current_time.second)
-
-        # log.debug(f"TTS Check: Current Time (GMT+7): {current_time.strftime('%H:%M:%S')}, Target: {self.scheduled_time.strftime('%H:%M:%S')}")
-
-        # ตรวจสอบว่าถึงเวลาหรือยัง และยังไม่ได้กำลังเล่นเสียงอยู่
-        if current_hms == target_hms and not self.is_playing:
-            log.info(f"Scheduled time {self.scheduled_time.strftime('%H:%M:%S')} reached. Attempting TTS.")
-            self.is_playing = True # ตั้ง flag ว่ากำลังจะเล่น
-            await self.connect_and_speak()
-            # หลังจากเรียก connect_and_speak, is_playing จะถูกตั้งเป็น False ใน after_play_cleanup
-            # เพิ่ม delay เล็กน้อยหลังเล่นเสร็จ เพื่อป้องกันการ trigger ซ้ำในวินาทีเดียวกัน (ถ้า loop เร็ว)
-            await asyncio.sleep(2)
-
-    @tts_task_loop.before_loop
-    async def before_tts_task_loop(self):
-        """Wait until the bot is ready before starting the loop."""
-        await self.bot.wait_until_ready()
-        log.info("TTS Scheduler: Bot is ready. Task loop will now check the time.")
-
-    async def connect_and_speak(self):
-        """Connects to the target voice channel and speaks the message."""
-        guild = self.bot.get_guild(self.target_guild_id)
-        if not guild:
-            log.error(f"Cannot find target guild with ID: {self.target_guild_id}")
-            self.is_playing = False # Reset flag if guild not found
-            return
-
-        voice_channel = guild.get_channel(self.target_voice_channel_id)
-        if not voice_channel or not isinstance(voice_channel, discord.VoiceChannel):
-            log.error(f"Cannot find target voice channel or it's not a voice channel. ID: {self.target_voice_channel_id}")
-            self.is_playing = False # Reset flag
-            return
-
-        # ตรวจสอบว่า bot เชื่อมต่อ voice ใน guild นี้อยู่แล้วหรือไม่
-        self.current_voice_client = guild.voice_client
-        try:
-            if self.current_voice_client and self.current_voice_client.is_connected():
-                if self.current_voice_client.channel != voice_channel:
-                    log.info(f"Moving voice client to target channel: {voice_channel.name}")
-                    await self.current_voice_client.move_to(voice_channel)
-                else:
-                    log.info(f"Already connected to the target channel: {voice_channel.name}")
-            else:
-                log.info(f"Connecting to voice channel: {voice_channel.name}")
-                self.current_voice_client = await voice_channel.connect(timeout=20.0, reconnect=True)
-
-            if not self.current_voice_client:
-                 log.error("Failed to establish voice connection.")
-                 self.is_playing = False
-                 return
-
-            # ป้องกันการเล่นซ้อน ถ้า voice client กำลังเล่นอย่างอื่นอยู่ (อาจไม่จำเป็นถ้า is_playing จัดการดีแล้ว)
-            if self.current_voice_client.is_playing():
-                log.warning("Voice client is already playing something. Skipping scheduled TTS for now.")
-                # ไม่ควรตั้ง is_playing เป็น False ที่นี่ เพราะเรายังอยู่ในช่วงเวลาที่ควรจะเล่น
-                # แต่การเล่นครั้งนี้ถูกข้ามไป รอ loop ถัดไป
-                return
-
-            # สร้างไฟล์ TTS
-            # ใช้ ID เฉพาะสำหรับ task นี้ เพื่อไม่ให้ชนกับ test command
-            tts_filename = os.path.join(TEMP_TTS_DIR, f"scheduled_tts_{self.target_voice_channel_id}.mp3")
-            log.info(f"Generating scheduled TTS audio: '{self.tts_message}'")
+        if self.scheduler and self.scheduler.running:
+            log.info("Shutting down APScheduler...")
             try:
-                tts = gTTS(text=self.tts_message, lang='th', slow=False)
-                await self.bot.loop.run_in_executor(None, tts.save, tts_filename)
-                log.info(f"Saved scheduled TTS audio to: {tts_filename}")
+                self.scheduler.shutdown(wait=False)
+                log.info("APScheduler shut down.")
             except Exception as e:
-                log.exception("Failed to generate scheduled TTS audio.")
-                self.is_playing = False # Reset flag on failure
-                # พยายาม disconnect ถ้าเพิ่งต่อเข้าไป
-                if self.current_voice_client.is_connected(): await self.current_voice_client.disconnect(force=True)
-                self.current_voice_client = None
-                return
+                 log.exception("Error during APScheduler shutdown.")
 
-            # เล่นไฟล์เสียง
-            if os.path.exists(tts_filename):
-                log.info(f"Playing scheduled TTS in {voice_channel.name}")
-                # Pass self.after_play_cleanup as the callback
-                source = discord.FFmpegPCMAudio(tts_filename, executable=FFMPEG_PATH)
-                self.current_voice_client.play(source, after=self.after_play_cleanup)
-            else:
-                log.error(f"Scheduled TTS file not found after generation: {tts_filename}")
-                self.is_playing = False # Reset flag
-                if self.current_voice_client.is_connected(): await self.current_voice_client.disconnect(force=True)
-                self.current_voice_client = None
+        # Attempt to disconnect if still connected
+        if self.current_voice_client and self.current_voice_client.is_connected():
+            log.warning("Cog unloading: Attempting to disconnect lingering voice client.")
+            # Use ensure_future as direct await might block unload
+            asyncio.ensure_future(self._force_disconnect(), loop=self.bot.loop)
+
+    async def _force_disconnect(self):
+         """Force disconnect, usually on unload."""
+         # Check reference before accessing attributes
+         vc = self.current_voice_client
+         if vc and vc.is_connected():
+            log.info("Forcing disconnect...")
+            try:
+                await vc.disconnect(force=True)
+                log.info("Force disconnected voice client.")
+            except Exception as e:
+                log.error(f"Error during force disconnect: {e}")
+            finally:
+                 # Clear reference even if disconnect failed
+                 self.current_voice_client = None
+         else:
+             log.debug("Force disconnect called but no active/connected client found.")
 
 
-        except discord.Forbidden:
-            log.error(f"No permission to join/move to voice channel {voice_channel.name}")
-            self.is_playing = False
-        except asyncio.TimeoutError:
-             log.error(f"Timed out connecting/moving to voice channel {voice_channel.name}")
-             self.is_playing = False
-        except discord.ClientException as e:
-             log.error(f"Discord ClientException during scheduled TTS connection/play: {e}")
-             self.is_playing = False
-             # Attempt cleanup if possible
-             if self.current_voice_client and self.current_voice_client.is_connected():
-                 try: await self.current_voice_client.disconnect(force=True)
-                 except: pass
-             self.current_voice_client = None
-        except Exception as e:
-            log.exception("An unexpected error occurred during connect_and_speak.")
-            self.is_playing = False
-            if self.current_voice_client and self.current_voice_client.is_connected():
-                 try: await self.current_voice_client.disconnect(force=True)
-                 except: pass
-            self.current_voice_client = None
+    async def run_tts_job(self, job_id: str, message_to_speak: str, lang: str):
+        """Function called by APScheduler to run a TTS job."""
+        log_prefix = f"Job '{job_id}': "
+        log.info(f"{log_prefix}Triggered (Lang: {lang}). Attempting to acquire lock...")
 
-    def after_play_cleanup(self, error: Optional[Exception]):
+        # Use try_lock if we don't want jobs to queue up waiting for the lock
+        # acquired_lock = await self.job_lock.acquire(blocking=False)
+        # if not acquired_lock:
+        #      log.warning(f"{log_prefix}Could not acquire lock (another job/test running). Skipping.")
+        #      return
+
+        # Or use async with to wait for the lock (jobs might queue)
+        async with self.job_lock:
+            log.info(f"{log_prefix}Acquired lock.")
+            # Double-check is_playing inside the lock (might have changed while waiting)
+            if self.is_playing:
+                log.warning(f"{log_prefix}Another TTS job/test started while waiting for lock. Skipping.")
+                return # Release lock implicitly
+
+            # Set playing flag
+            self.is_playing = True
+            log.info(f"{log_prefix}Set is_playing=True.")
+
+            # --- Main execution logic ---
+            guild = self.bot.get_guild(self.target_guild_id)
+            if not guild:
+                log.error(f"{log_prefix}Cannot find target guild {self.target_guild_id}.")
+                self.is_playing = False; return # Release lock implicitly
+
+            voice_channel = guild.get_channel(self.target_voice_channel_id)
+            if not voice_channel or not isinstance(voice_channel, discord.VoiceChannel):
+                 log.error(f"{log_prefix}Cannot find target voice channel {self.target_voice_channel_id}.")
+                 self.is_playing = False; return # Release lock implicitly
+
+            vc = guild.voice_client # Get current client
+            tts_filename = os.path.join(TEMP_TTS_DIR, f"scheduled_tts_{job_id}.mp3")
+            connected_or_moved = False
+            play_initiated = False
+
+            try:
+                # --- Connect / Move ---
+                if vc and vc.is_connected():
+                    if vc.channel.id != self.target_voice_channel_id:
+                        log.info(f"{log_prefix}Moving voice client from {vc.channel.name} to {voice_channel.name}")
+                        await vc.move_to(voice_channel)
+                        self.current_voice_client = vc # Ensure ref is up-to-date
+                    else:
+                         log.info(f"{log_prefix}Already connected to {voice_channel.name}")
+                    connected_or_moved = True
+                else:
+                    log.info(f"{log_prefix}Connecting to {voice_channel.name}")
+                    vc = await voice_channel.connect(timeout=20.0, reconnect=True)
+                    if vc:
+                         connected_or_moved = True
+                         self.current_voice_client = vc # Store new client reference
+                    else:
+                         log.error(f"{log_prefix}Connection attempt returned None.")
+
+                if not connected_or_moved or not self.current_voice_client:
+                    log.error(f"{log_prefix}Failed to establish voice connection.")
+                    self.is_playing = False; return # Release lock implicitly
+
+                # --- Generate TTS File ---
+                log.info(f"{log_prefix}Generating audio (Lang: {lang}): '{message_to_speak}'")
+                try:
+                    tts = gTTS(text=message_to_speak, lang=lang, slow=False)
+                    await self.bot.loop.run_in_executor(None, tts.save, tts_filename)
+                    log.info(f"{log_prefix}Saved audio to: {tts_filename}")
+                except Exception as e_gtts:
+                    log.exception(f"{log_prefix}Failed to generate audio.")
+                    self.is_playing = False; return # Release lock implicitly
+
+                # --- Play Audio File ---
+                if os.path.exists(tts_filename):
+                    log.info(f"{log_prefix}Playing audio in {voice_channel.name}")
+                    # Callback defined to run after playback
+                    def after_play_callback(error: Optional[Exception]):
+                        self.after_play_cleanup_job(error, job_id, tts_filename)
+
+                    # Ensure client is still valid before playing
+                    if not self.current_voice_client or not self.current_voice_client.is_connected():
+                        log.error(f"{log_prefix}Voice client disconnected before playback could start.")
+                        self.is_playing = False; return # Release lock implicitly
+
+                    source = discord.FFmpegPCMAudio(tts_filename, executable=self.ffmpeg_path)
+                    self.current_voice_client.play(source, after=after_play_callback)
+                    play_initiated = True
+                    # is_playing remains True until callback resets it
+
+                else:
+                    log.error(f"{log_prefix}TTS file not found after generation: {tts_filename}")
+                    self.is_playing = False; return # Release lock implicitly
+
+            except Exception as e:
+                log.exception(f"{log_prefix}An unexpected error occurred during connection or playback setup.")
+                self.is_playing = False # Ensure flag is reset on error
+                # Don't try to disconnect here, might interfere with other states
+
+            finally:
+                # If play was never initiated (due to error before vc.play), reset flag
+                if not play_initiated:
+                    self.is_playing = False
+                    log.debug(f"{log_prefix}Resetting is_playing flag due to error before playback initiation.")
+                # Lock is released automatically by 'async with'
+
+    def after_play_cleanup_job(self, error: Optional[Exception], job_id: str, audio_filename: str):
         """Callback function executed after scheduled TTS playback finishes or errors."""
+        log_prefix = f"Job '{job_id}' Callback: "
         if error:
-            log.error(f'Scheduled TTS Player error: {error}')
+            log.error(f'{log_prefix}Player error: {error}')
         else:
-            log.info("Scheduled TTS playback finished successfully.")
+            log.info(f"{log_prefix}Playback finished successfully.")
 
-        # --- Cleanup scheduled TTS file ---
-        tts_filename = os.path.join(TEMP_TTS_DIR, f"scheduled_tts_{self.target_voice_channel_id}.mp3")
+        # --- Cleanup TTS file ---
         try:
-            if os.path.exists(tts_filename):
-                os.remove(tts_filename)
-                log.info(f"Deleted scheduled TTS file: {tts_filename}")
+            if os.path.exists(audio_filename):
+                os.remove(audio_filename)
+                log.info(f"{log_prefix}Deleted audio file: {audio_filename}")
         except Exception as e_clean:
-            log.error(f"Error deleting scheduled TTS file {tts_filename}: {e_clean}")
+            log.error(f"{log_prefix}Error deleting audio file {audio_filename}: {e_clean}")
 
-        # --- Reset playing flag ---
-        # ควรจะ reset flag หลังจาก cleanup เสร็จสิ้น
-        self.is_playing = False
-        log.info("Reset is_playing flag to False.")
+        # --- Reset playing flag (in main loop) ---
+        # It's crucial this runs to allow other jobs/tests
+        self.bot.loop.call_soon_threadsafe(self._reset_playing_flag, job_id)
 
-        # --- Optional: Disconnect after scheduled play? ---
-        # ตัดสินใจว่าจะให้ disconnect หรืออยู่ต่อ
-        # ถ้าต้องการให้ออกเลย:
-        # if self.current_voice_client and self.current_voice_client.is_connected():
-        #     log.info("Disconnecting after scheduled TTS playback.")
-        #     # Need to schedule disconnect in the main loop
-        #     self.bot.loop.create_task(self.current_voice_client.disconnect(force=False))
-        # self.current_voice_client = None # Clear reference
-
-        # ถ้าต้องการให้อยู่ต่อ ไม่ต้องทำอะไรตรงนี้ self.current_voice_client ยังคงอยู่
+    def _reset_playing_flag(self, source_id: str):
+         """Resets the playing flag. Intended to be called from threadsafe context."""
+         # This runs in the main event loop
+         log.info(f"Callback Helper for '{source_id}': Resetting is_playing flag.")
+         self.is_playing = False
+         # --- Keep client connected ---
+         log.info(f"Callback Helper for '{source_id}': Keeping voice client connected (if still connected).")
 
 
     # --- TEST COMMAND ---
     @commands.command(name="testtts")
-    @commands.guild_only() # Command should only be used in a server
-    async def test_tts_command(self, ctx: commands.Context, *, text_to_speak: str):
+    @commands.guild_only()
+    @commands.cooldown(1, 10, commands.BucketType.user) # Add cooldown to prevent spam
+    async def test_tts_command(self, ctx: commands.Context, lang: Optional[str] = None, *, text_to_speak: str = None):
         """
-        (Testing) Speaks the given text in your current voice channel.
-        Example: !testtts สวัสดีทุกคน
+        (Testing) Speaks text in your voice channel. Stays connected.
+        Usage: !testtts [lang_code] <text>
+        Example: !testtts en Hello there
+        Example: !testtts สวัสดี
         """
-        # 1. Check if user is in a voice channel
+        log_prefix = "TestTTS: "
         if ctx.author.voice is None or ctx.author.voice.channel is None:
-            await ctx.send("You need to be in a voice channel to use this command.")
+            await ctx.send("You need to be in a voice channel.")
             return
+
+        # --- Argument Parsing ---
+        actual_lang = DEFAULT_LANG
+        actual_text = text_to_speak
+
+        # If only one argument is given, assume it's the text with default lang
+        if lang and text_to_speak is None:
+             actual_text = lang # The first word was actually the text
+             # lang remains None, so actual_lang stays default
+        # If lang is provided and seems like a lang code (e.g., 2 letters), use it
+        elif lang and len(lang) <= 3 and lang.isalpha(): # Basic check for lang code
+             actual_lang = lang.lower()
+        # If lang is provided but looks like part of the text, combine them
+        elif lang:
+            actual_text = f"{lang} {text_to_speak if text_to_speak else ''}".strip()
+            # actual_lang stays default
+
+        if not actual_text:
+            await ctx.send(f"Please provide text to speak. Usage: `{ctx.prefix}testtts [lang_code] <text>`")
+            return
+        #-------------------------
 
         voice_channel = ctx.author.voice.channel
         guild = ctx.guild
 
-        # 2. Check if text is provided
-        if not text_to_speak:
-            await ctx.send("Please provide the text you want me to speak. Usage: `!testtts <your text>`")
+        log.info(f"{log_prefix}Command invoked by {ctx.author} in {voice_channel.name}. Lang='{actual_lang}', Text='{actual_text}'")
+
+        # --- Acquire Lock ---
+        # Use try_lock or wait briefly
+        try:
+            async with asyncio.timeout(5): # Wait max 5 seconds for lock
+                 await self.job_lock.acquire()
+        except asyncio.TimeoutError:
+            log.warning(f"{log_prefix}Could not acquire lock within timeout (TTS busy).")
+            await ctx.send("The TTS system is currently busy. Please try again shortly.")
             return
+        #--------------------
 
-        # 3. Get or establish voice connection
-        test_voice_client = guild.voice_client # Get the bot's current voice client in this guild
-        is_new_connection = False # Flag to know if we initiated the connection
-
-        # Check if bot is already playing (potentially the scheduled task or another test)
-        if test_voice_client and test_voice_client.is_playing():
-             await ctx.send("I'm already speaking in a voice channel. Please wait.")
-             return
-
-        if test_voice_client and test_voice_client.is_connected():
-            # If already connected, move to the user's channel if different
-            if test_voice_client.channel != voice_channel:
-                try:
-                    await test_voice_client.move_to(voice_channel)
-                    log.info(f"TestTTS: Moved voice client to {voice_channel.name}")
-                except asyncio.TimeoutError:
-                    await ctx.send(f"Timed out trying to move to {voice_channel.name}.")
-                    return
-                except discord.ClientException as e:
-                    log.error(f"TestTTS: ClientException during move: {e}")
-                    await ctx.send(f"Could not move to voice channel: {e}")
-                    return
-        else:
-            # If not connected, try to connect
-            try:
-                log.info(f"TestTTS: Connecting to voice channel: {voice_channel.name}")
-                test_voice_client = await voice_channel.connect(timeout=15.0) # Added timeout
-                is_new_connection = True # We initiated this connection
-                log.info(f"TestTTS: Connected voice client to {voice_channel.name}")
-            except discord.Forbidden:
-                log.error(f"TestTTS: No permission to join {voice_channel.name}")
-                await ctx.send(f"I don't have permission to join {voice_channel.name}.")
-                return
-            except asyncio.TimeoutError:
-                log.error(f"TestTTS: Timed out connecting to {voice_channel.name}")
-                await ctx.send(f"Timed out trying to connect to {voice_channel.name}.")
-                return
-            except discord.ClientException as e:
-                 log.error(f"TestTTS: ClientException during connect: {e}")
-                 await ctx.send(f"Voice connection error: {e}")
-                 # Ensure client is None if connection failed mid-way
-                 test_voice_client = None
-                 return
-
-        # Double check connection and client validity
-        if not test_voice_client or not test_voice_client.is_connected():
-             log.error("TestTTS: Failed to establish or verify voice connection.")
-             await ctx.send("Failed to establish voice connection.")
-             return
-
-        # 4. Generate TTS audio file
-        # Use a unique temporary filename based on message ID
+        # Lock acquired, proceed but wrap in try/finally to ensure release
+        play_initiated = False
         temp_filename = os.path.join(TEMP_TTS_DIR, f"test_tts_{ctx.message.id}.mp3")
         try:
-            log.info(f"TestTTS: Generating audio for: '{text_to_speak}'")
-            tts = gTTS(text=text_to_speak, lang='th', slow=False) # Assuming Thai
-            await self.bot.loop.run_in_executor(None, tts.save, temp_filename)
-            log.info(f"TestTTS: Saved temporary audio file: {temp_filename}")
-        except Exception as e:
-            log.exception(f"TestTTS: Failed to generate TTS audio")
-            await ctx.send(f"Sorry, I couldn't generate the speech audio: {e}")
-            # Attempt to disconnect only if we created the connection for this test
-            if is_new_connection and test_voice_client.is_connected():
-                await test_voice_client.disconnect(force=True)
-            return
+            # --- Double-check playing status inside lock ---
+            if self.is_playing:
+                log.warning(f"{log_prefix}Another TTS job/test started while waiting for lock. Aborting.")
+                await ctx.send("The TTS system became busy while waiting. Please try again.")
+                return # Lock will be released by finally
 
-        # 5. Play the audio file
-        try:
-            # --- Define the cleanup callback function FOR THE TEST ---
-            def after_test_playback(error):
-                log_prefix = "TestTTS Cleanup: "
-                if error:
-                    log.error(f'{log_prefix}Player error: {error}')
+            # --- Set playing flag ---
+            self.is_playing = True
+            log.info(f"{log_prefix}Acquired lock and set is_playing=True.")
+            # -----------------------
+
+            vc = guild.voice_client
+            connected_or_moved = False
+
+            # --- Connect / Move ---
+            if vc and vc.is_connected():
+                if vc.channel.id != voice_channel.id:
+                    log.info(f"{log_prefix}Moving voice client to {voice_channel.name}")
+                    await vc.move_to(voice_channel)
+                    self.current_voice_client = vc
                 else:
-                    log.info(f"{log_prefix}Playback finished.")
+                     log.info(f"{log_prefix}Already connected to {voice_channel.name}")
+                connected_or_moved = True
+            else:
+                log.info(f"{log_prefix}Connecting to {voice_channel.name}")
+                vc = await voice_channel.connect(timeout=15.0)
+                if vc:
+                     connected_or_moved = True
+                     self.current_voice_client = vc
+                else:
+                     log.error(f"{log_prefix}Connection attempt returned None.")
 
-                # --- Cleanup Task ---
-                async def cleanup_tasks():
-                    # a. Delete the temporary file
-                    try:
-                        if os.path.exists(temp_filename):
-                            os.remove(temp_filename)
-                            log.info(f"{log_prefix}Deleted temporary file: {temp_filename}")
-                        else:
-                            log.warning(f"{log_prefix}File not found for deletion: {temp_filename}")
-                    except Exception as e_clean:
-                        log.error(f"{log_prefix}Error deleting file {temp_filename}: {e_clean}")
+            if not connected_or_moved or not self.current_voice_client:
+                log.error(f"{log_prefix}Failed to establish voice connection.")
+                await ctx.send("Failed to connect to your voice channel.")
+                return # Lock released by finally
 
-                    # b. Disconnect if this command initiated the connection
-                    # Make sure we are referencing the correct client potentially captured by closure
-                    vc_to_disconnect = guild.voice_client # Get current client state
-                    if is_new_connection and vc_to_disconnect and vc_to_disconnect.is_connected():
-                       log.info(f"{log_prefix}Disconnecting voice client initiated by this command.")
-                       try:
-                           await vc_to_disconnect.disconnect(force=False)
-                           log.info(f"{log_prefix}Disconnected voice client.")
-                       except Exception as e_disc:
-                           log.error(f"{log_prefix}Error disconnecting voice client: {e_disc}")
-                    elif not is_new_connection:
-                         log.info(f"{log_prefix}Keeping existing voice connection intact.")
+            # --- Generate gTTS ---
+            log.info(f"{log_prefix}Generating audio (Lang: {actual_lang}) for: '{actual_text}'")
+            try:
+                tts = gTTS(text=actual_text, lang=actual_lang, slow=False)
+                await self.bot.loop.run_in_executor(None, tts.save, temp_filename)
+                log.info(f"{log_prefix}Saved temporary audio file: {temp_filename}")
+            except ValueError as e_lang:
+                 log.warning(f"{log_prefix}Invalid language code '{actual_lang}': {e_lang}")
+                 await ctx.send(f"Sorry, '{actual_lang}' is not a valid language code for TTS.")
+                 return # Lock released by finally
+            except Exception as e_gtts:
+                log.exception(f"{log_prefix}Failed to generate audio.")
+                await ctx.send("Sorry, I couldn't generate the speech audio.")
+                return # Lock released by finally
 
-                self.bot.loop.create_task(cleanup_tasks())
-            # --- End of cleanup callback definition ---
 
-            source = discord.FFmpegPCMAudio(temp_filename, executable=FFMPEG_PATH)
-            test_voice_client.play(source, after=after_test_playback) # Use the specific cleanup for test
-            log.info(f"TestTTS: Playing '{text_to_speak}' in {voice_channel.name}")
-            await ctx.send(f"Okay, speaking: \"{text_to_speak}\" in {voice_channel.mention}", delete_after=20) # Give confirmation
+            # --- Callback for Test ---
+            def after_test_cb(error: Optional[Exception]):
+                cb_log_prefix = "TestTTS Callback: "
+                if error: log.error(f'{cb_log_prefix}Player error: {error}')
+                else: log.info(f"{cb_log_prefix}Playback finished.")
+                # Cleanup file
+                try:
+                    if os.path.exists(temp_filename): os.remove(temp_filename); log.info(f"{cb_log_prefix}Deleted: {temp_filename}")
+                except Exception as e_clean: log.error(f"{cb_log_prefix}Error deleting {temp_filename}: {e_clean}")
+                # Reset flag ONLY (no disconnect)
+                self.bot.loop.call_soon_threadsafe(self._reset_playing_flag, f"test_{ctx.message.id}")
 
-        except discord.ClientException as e:
-            log.error(f"TestTTS: Discord ClientException during playback: {e}")
-            await ctx.send(f"Could not play the audio: {e}")
-            # Cleanup file and maybe disconnect if we initiated
-            try: os.remove(temp_filename)
-            except: pass
-            if is_new_connection and test_voice_client.is_connected(): await test_voice_client.disconnect(force=True)
+            # --- Play Audio ---
+            if os.path.exists(temp_filename):
+                 if not self.current_voice_client or not self.current_voice_client.is_connected():
+                      log.error(f"{log_prefix}Voice client disconnected before playback could start.")
+                      await ctx.send("Voice connection lost before playback.")
+                      return # Lock released by finally
+
+                 log.info(f"{log_prefix}Playing in {voice_channel.name}")
+                 source = discord.FFmpegPCMAudio(temp_filename, executable=self.ffmpeg_path)
+                 self.current_voice_client.play(source, after=after_test_cb)
+                 play_initiated = True
+                 await ctx.message.add_reaction("🔊") # Feedback that it started
+            else:
+                 log.error(f"{log_prefix}Test TTS file not found after generation: {temp_filename}")
+                 await ctx.send("Error: Could not find the generated audio file.")
+                 return # Lock released by finally
+
+        except asyncio.TimeoutError: # Timeout for acquiring lock
+             log.warning(f"{log_prefix}Could not acquire lock within timeout (TTS busy).")
+             await ctx.send("The TTS system is currently busy. Please try again shortly.")
         except Exception as e:
-            log.exception(f"TestTTS: Unexpected error during playback initiation")
-            await ctx.send("An unexpected error occurred while trying to play the speech.")
-            # Cleanup file and maybe disconnect if we initiated
-            try: os.remove(temp_filename)
-            except: pass
-            if is_new_connection and test_voice_client.is_connected(): await test_voice_client.disconnect(force=True)
+            log.exception(f"{log_prefix}Error during execution: {e}")
+            await ctx.send(f"An error occurred: {e}")
+        finally:
+            # --- Release Lock and Reset Flag if needed ---
+            if not play_initiated: # Reset flag if play never started due to error
+                self.is_playing = False
+                log.debug(f"{log_prefix}Resetting is_playing flag in finally block because play was not initiated.")
+            if self.job_lock.locked():
+                self.job_lock.release()
+                log.debug(f"{log_prefix}Released lock in finally block.")
+            # ---------------------------------------------
 
 
 # --- ฟังก์ชัน Setup สำหรับ Cog ---
 async def setup(bot: commands.Bot):
     """Loads the TextToSpeechSchedulerCog."""
     try:
-        # Ensure FFmpeg is available before adding cog (optional check)
-        # try:
-        #     process = await asyncio.create_subprocess_shell('ffmpeg -version', stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        #     stdout, stderr = await process.communicate()
-        #     if process.returncode != 0:
-        #         log.error("FFmpeg not found or not executable. TTS functionality will likely fail.")
-        #     else:
-        #         log.info("FFmpeg found.")
-        # except FileNotFoundError:
-        #      log.error("FFmpeg command not found. Install FFmpeg and ensure it's in the system PATH.")
-
         await bot.add_cog(TextToSpeechSchedulerCog(bot))
-        log.info("TTS Scheduler Cog: Setup complete, Cog added to bot.")
+        log.info("TTS Scheduler Cog (APScheduler): Setup complete, Cog added to bot.")
     except Exception as e:
-        log.exception("TTS Scheduler Cog: Failed to load Cog.")
-        # raise e
+        log.exception("TTS Scheduler Cog (APScheduler): Failed to load Cog.")
