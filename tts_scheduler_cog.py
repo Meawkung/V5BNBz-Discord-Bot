@@ -45,8 +45,8 @@ class TextToSpeechSchedulerCog(commands.Cog):
             self.default_timezone = None # ใช้ค่า default ของ APScheduler (น่าจะเป็น UTC)
 
         # --- ตั้งค่าเป้าหมาย (ควรตั้งจาก config หรือ env var ในอนาคต) ---
-        self.target_guild_id = 719548826834436133       # <<< ใส่ Guild ID ของคุณ
-        self.target_voice_channel_id = 1280895030780887163 # <<< ใส่ Voice Channel ID ของคุณ
+        self.target_guild_id = 1097740536527470717       # <<< ใส่ Guild ID ของคุณ
+        self.target_voice_channel_id = 1250561983305224222 # <<< ใส่ Voice Channel ID ของคุณ
         self.ffmpeg_path = os.getenv("FFMPEG_PATH") # โหลด Path FFMPEG จาก .env
 
         # --- สถานะภายใน ---

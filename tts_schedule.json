@@ -1,42 +1,58 @@
 [
-    {
-      "id": "OB1min",
-      "hour": 22,
-      "minute": 50,
-      "second": 0,
-      "days": "thu",
-      "message": "O B one minute"
-    },
-    {
-        "id": "OB30sec",
-        "hour": 22,
-        "minute": 50,
-        "second": 30,
-        "days": "thu",
-        "message": "O B thirty seconds"
-    },
-    {
-        "id": "OB10sec",
-        "hour": 22,
-        "minute": 50,
-        "second": 50,
-        "days": "thu",
-        "message": "O B ten seconds"
-    },
-    {
-        "id": "OB5sec",
-        "hour": 22,
-        "minute": 50,
-        "second": 55,
-        "days": "thu",
-        "message": "O B five seconds"
-    },
-    {
-        "id": "OB0sec",
-        "hour": 22,
-        "minute": 51,
-        "second": 0,
-        "days": "thu",
-        "message": "O B now!"
-    }
+  {
+    "id": "welcome",
+    "hour": 20,
+    "minute": 55,
+    "second": 57,
+    "days": "tue,thu,sat",
+    "message": "Welcome to Main Arena."
+  },
+  {
+    "id": "guildLeague1min",
+    "hour": 20,
+    "minute": 57,
+    "second": 57,
+    "days": "tue,thu,sat",
+    "message": "Guild League will start in one minute."
+  },
+  {
+    "id": "guildLeagueStart",
+    "hour": 20,
+    "minute": 59,
+    "second": 57,
+    "days": "tue,thu,sat",
+    "message": "Guild League started."
+  },
+  {
+    "id": "mob1min",
+    "hour": 21,
+    "minute": 3,
+    "second": 57,
+    "days": "tue,thu,sat",
+    "message": "Mob one minute"
+  },
+  {
+    "id": "mobRespawn",
+    "hour": 21,
+    "minute": 4,
+    "second": 57,
+    "days": "tue,thu,sat",
+    "message": "Mob respawned."
+  },
+  {
+    "id": "OB1min",
+    "hour": 21,
+    "minute": 8,
+    "second": 57,
+    "days": "tue,thu,sat",
+    "message": "O B one minute"
+  },
+  {
+    "id": "OBSpawn",
+    "hour": 21,
+    "minute": 9,
+    "second": 57,
+    "days": "tue,thu,sat",
+    "message": "O B spawned."
+  }
 ]
