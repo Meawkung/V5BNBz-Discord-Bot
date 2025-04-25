@@ -1,8 +1,4 @@
-โอเคครับ นี่คือตัวอย่างไฟล์ `README.md` ที่สรุปรายละเอียดของบอทตามโค้ดที่คุณมี (รวมถึง Image Analyzer, Voice Logger และ Bidding System ที่ถูกคอมเมนต์ไว้)
 
-คุณสามารถคัดลอกเนื้อหานี้ไปใส่ในไฟล์ชื่อ `README.md` ในโฟลเดอร์โปรเจกต์ของคุณได้เลย
-
-```markdown
 # Discord Bot: Image Analyzer, Voice Logger & Bidding System
 
 บอท Discord อเนกประสงค์ที่พัฒนาด้วย Python และไลบรารี `discord.py` พร้อมฟีเจอร์หลัก 3 ส่วน:
@@ -130,5 +126,4 @@ your_bot_project/
 *   google-generativeai (`pip install -U google-generativeai`)
 *   Pillow (`pip install -U Pillow`)
 ```
-
 อย่าลืมปรับแก้ ID ช่องต่างๆ และข้อมูลในไฟล์ `.env` ให้ถูกต้องตามสภาพแวดล้อมของคุณนะครับ!
