@@ -1,0 +1,35 @@
+# requirements.txt
+
+# Core discord library
+discord.py==2.5.2
+
+# For loading environment variables (.env file)
+python-dotenv==1.1.0
+
+# For interacting with Google Gemini API (Image Analyzer)
+google-generativeai==0.8.5
+
+# For image processing (Image Analyzer)
+Pillow==11.2.1
+
+# For Text-to-Speech generation (TTS Scheduler)
+gTTS==2.5.4
+
+# For scheduling tasks (TTS Scheduler)
+APScheduler==3.11.16
+
+# Required for voice functionality in discord.py (used by TTS Scheduler)
+PyNaCl==1.5.0
+
+# --- Notes ---
+# - It's highly recommended to "freeze" the specific versions you are using
+#   to ensure reproducibility. You can generate a file with exact versions
+#   from your working environment using: pip freeze > requirements.txt
+# - Example with versions (replace X.Y.Z with your actual versions):
+#   discord.py==2.3.2
+#   python-dotenv==1.0.1
+#   google-generativeai==0.5.4
+#   Pillow==10.3.0
+#   gTTS==2.5.1
+#   APScheduler==3.10.4
+#   PyNaCl==1.5.0

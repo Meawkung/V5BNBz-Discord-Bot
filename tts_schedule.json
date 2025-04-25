@@ -54,5 +54,13 @@
     "second": 57,
     "days": "tue,thu,sat",
     "message": "O B spawned."
+  },
+  {
+    "id": "Test",
+    "hour": 13,
+    "minute": 54,
+    "second": 30,
+    "days": "fri",
+    "message": "test123"
   }
 ]
