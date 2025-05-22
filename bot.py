@@ -4,6 +4,7 @@ import logging # <<< เพิ่ม logging
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands
+import db_manager
 
 # --- ตั้งค่า Logging ---
 # ตั้งค่าพื้นฐานเพื่อให้เห็น log จาก Cog อื่นๆ ด้วย
@@ -47,6 +48,15 @@ INITIAL_EXTENSIONS = [
 
 # --- ฟังก์ชันหลักสำหรับ Setup และ รันบอท ---
 async def main():
+    # --- เริ่มต้น Connection Pool ---
+    try:
+        log.info("--- กำลัง initialize PostgreSQL connection pool ---")
+        await db_manager.get_pool() # เรียกเพื่อให้ pool ถูกสร้างและเก็บไว้ใน db_manager
+        log.info("✅ PostgreSQL connection pool initialized.")
+    except Exception as e:
+        log.critical(f"❌ ไม่สามารถ initialize PostgreSQL connection pool: {e}. บอทอาจทำงานไม่ถูกต้อง.")
+        # คุณอาจจะต้องการให้บอทหยุดทำงานถ้าเชื่อมต่อ DB ไม่ได้
+        # return
     async with bot: # ใช้ async with bot เพื่อจัดการการเชื่อมต่อและ cleanup
         # โหลด Cogs ทั้งหมด
         log.info("--- กำลังโหลด Extensions ---")
@@ -77,6 +87,11 @@ async def main():
             log.critical("!!! ข้อผิดพลาด: Discord Token ไม่ถูกต้อง โปรดตรวจสอบในไฟล์ .env")
         except Exception as e:
             log.exception(f"!!! เกิดข้อผิดพลาดร้ายแรงในการรันบอท: {e}")
+        finally:
+            # --- ปิด Connection Pool เมื่อบอทหยุดทำงาน ---
+            log.info("--- กำลังปิด PostgreSQL connection pool ---")
+            await db_manager.close_pool()
+            log.info("✅ PostgreSQL connection pool closed.")
 
 # --- Event on_ready ---
 @bot.event
