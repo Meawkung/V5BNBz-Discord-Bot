@@ -103,7 +103,7 @@ async def upsert_discord_user(user_id: int, username: str, display_name: str, av
                 display_name = EXCLUDED.display_name,
                 avatar_url = EXCLUDED.avatar_url,
                 last_seen_at = $5;
-        """, user_id, username, display_name, avatar_url, current_time)
+        """, str(user_id), username, display_name, avatar_url, current_time) # Cast user_id to str
         # log.debug(f"Upserted user: ID={user_id}, Name={display_name}") # อาจจะ log มากไป
 
 async def add_voice_log(user_id: int, action: str, channel_id: int, channel_name: str,
@@ -115,7 +115,7 @@ async def add_voice_log(user_id: int, action: str, channel_id: int, channel_name
         await conn.execute("""
             INSERT INTO voice_channel_logs (user_id, action, channel_id, channel_name, from_channel_id, from_channel_name, "timestamp")
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, user_id, action, channel_id, channel_name, from_channel_id, from_channel_name, current_time)
+        """, str(user_id), action, str(channel_id), channel_name, str(from_channel_id) if from_channel_id is not None else None, from_channel_name, current_time) # Cast user_id, channel_id, from_channel_id to str
         log.info(f"บันทึก Voice Log: User {user_id} action '{action}' on channel '{channel_name}' ({channel_id})")
 
 # ตัวอย่างฟังก์ชันสำหรับดึงข้อมูล (ถ้าต้องการ)
@@ -128,7 +128,7 @@ async def get_user_voice_logs(user_id: int, limit: int = 10):
             WHERE user_id = $1
             ORDER BY "timestamp" DESC
             LIMIT $2
-        """, user_id, limit)
+        """, str(user_id), limit) # Cast user_id to str
         return rows
 
 # --- ฟังก์ชันสำหรับ setup และ teardown pool ใน bot หลัก ---

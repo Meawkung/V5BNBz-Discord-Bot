@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 
 # --- ค่าคงที่ ---
 # ย้าย ID ต่างๆ มาไว้ตรงนี้เพื่อให้แก้ไขง่าย
-MONITORED_VOICE_CHANNEL_IDS = [1250561983305224222, 1135925419753869312, 1251996192699711599] # #GLMain, #GLSub, Overun
+MONITORED_VOICE_CHANNEL_IDS = [1250561983305224222, 1135925419753869312,1364960947504156713, 1251996192699711599] # #GLMain, #GLSub, Overun
 NOTIFICATION_TEXT_CHANNEL_IDS = [1264562975851810847] # Channel สำหรับแจ้งเตือน
 
 # --- ฟังก์ชันช่วยเหลือสำหรับ Timestamp (ยังใช้สำหรับ Embed) ---
