@@ -301,6 +301,7 @@ class BiddingCog(commands.Cog):
             user_id = user.id
             # พยายามดึง Member object เพื่อเอา Nickname (อาจจะไม่มีถ้า interaction มาจากนอก Guild หรือ Member ออกไปแล้ว)
             display_name = user.display_name # ใช้ display_name ซึ่งจะ fallback ไปเป็น global name ถ้าไม่มี nick
+            user_global_name = user.global_name or user.name # ใช้ global_name ถ้ามี (สำหรับบอทที่มีชื่อ global)
 
             existing_bid_index = next((i for i, bid in enumerate(bids_for_rune) if bid['user_id'] == user_id), -1)
 
@@ -308,12 +309,13 @@ class BiddingCog(commands.Cog):
                 bids_for_rune[existing_bid_index]['quantity'] += 1
                 bids_for_rune[existing_bid_index]['timestamp'] = timestamp
                 bids_for_rune[existing_bid_index]['done'] = False # การกดปุ่มใหม่ถือว่ายังไม่ done
+                bids_for_rune[existing_bid_index]['user_display_name'] = user_global_name
                 log.info(f"อัปเดตการประมูล: {display_name} ({user_id}) สำหรับ {rune_label} เป็น {bids_for_rune[existing_bid_index]['quantity']}")
             else:
                 new_bid = {
                     'user_id': user_id,
                     'user_mention': user.mention,
-                    'user_display_name': display_name,
+                    'user_display_name': user_global_name,
                     'quantity': 1,
                     'timestamp': timestamp,
                     'done': False
