@@ -196,11 +196,11 @@ class BiddingCog(commands.Cog):
                   log.info(f"พบ Bidding Message ID ที่บันทึกไว้: {self.bidding_message_id}")
                   # อาจจะ fetch ข้อความมาตรวจสอบสถานะ หรืออัปเดต view ถ้าจำเป็น
              else:
-                  log.warning("ไม่พบ Bidding Message ID ที่บันทึกไว้. อาจต้องใช้ !startbidding เพื่อสร้างใหม่")
+                  log.warning("ไม่พบ Bidding Message ID ที่บันทึกไว้. อาจต้องใช้ !startbiddingrune เพื่อสร้างใหม่")
 
 
     # --- Command สำหรับเริ่ม/สร้างข้อความประมูล ---
-    @commands.command(name="startbidding")
+    @commands.command(name="startbiddingrune")
     @commands.has_permissions(administrator=True) # จำกัดให้ Admin ใช้
     @commands.guild_only() # ใช้ได้เฉพาะใน Server
     async def start_bidding(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
