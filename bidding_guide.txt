@@ -3,7 +3,7 @@
 ## เริ่มต้นยังไงดี?
 - แค่เช็คว่าบอทออนไลน์อยู่ในห้องแชทที่กำหนดไว้ก็พอ
 ## อยากประมูลการ์ด ทำไงดี?
-1. เห็นการ์ดที่ชอบใช่มั้ย? กดปุ่มเลย! (เช่น ปุ่ม Deviling Puppet II)
+1. เห็นการ์ด/รูนที่ชอบใช่มั้ย? กดปุ่มเลย! (เช่น ปุ่ม Deviling Puppet II หรือ Netherforce)
 2. อยากเพิ่มจำนวนที่ประมูล? แค่กดปุ่มเดิมซ้ำๆ มันจะเพิ่มให้ทีละ 1 เอง
 3. อยากรู้ว่าใครประมูลอะไรบ้าง? บอทจะอัพเดตให้เองทุกครั้งที่มีคนประมูล
 ## จัดการประมูลของเรา
@@ -22,7 +22,7 @@ Welcome to the Bidding Bot! Here’s how to use it:
 ## **Getting Started**
 - **Check**: Ensure the bot is online in the designated channel.
 ## **Bidding on Cards**
-1. **Select a Card:** Click the button for the card you want to bid on (e.g., Deviling Puppet II).
+1. **Select a Card:** Click the button for the card/rune you want to bid on (e.g., Deviling Puppet II or Netherforce).
 2. **Auto Quantity:** Bidding on the same card increases your bid quantity by 1.
 3. **Current Bids:** The bot will update the bids after each action.
 ## **Manage Bids**

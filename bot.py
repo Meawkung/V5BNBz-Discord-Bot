@@ -43,7 +43,8 @@ INITIAL_EXTENSIONS = [
     'image_analyzer_cog',  # Cog วิเคราะห์รูปภาพ
     'voice_logging_cog',   # Cog สำหรับ Voice Log ที่สร้างใหม่
     # 'bidding_cog',         # <<< คอมเมนต์ออกเพื่อ disable Bidding System ชั่วคราว
-    'tts_scheduler_cog'
+    'tts_scheduler_cog',
+    'bidrune_cog',  # Cog สำหรับระบบประมูล Rune
 ]
 
 # --- ฟังก์ชันหลักสำหรับ Setup และ รันบอท ---
