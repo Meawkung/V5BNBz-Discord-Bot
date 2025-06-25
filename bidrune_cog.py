@@ -12,7 +12,7 @@ from typing import Dict, List, Optional # เพิ่ม type hinting
 log = logging.getLogger(__name__)
 
 # --- ค่าคงที่ ---
-# ย้ายรายการการ์ดมาไว้ตรงนี้
+# ย้ายรายการรูนมาไว้ตรงนี้
 BIDDING_RUNES: List[str] = [
     "Netherforce"
 ]
@@ -28,42 +28,55 @@ BiddingDataType = Dict[str, List[Dict[str, any]]]
 # --- คลาส UI Components (Buttons, Select, View) ---
 
 class RuneButton(Button):
-    def __init__(self, rune_label: str, cog_instance): # รับ instance ของ Cog เข้ามา
-        # สร้าง custom_id ที่ไม่ซ้ำกันและค่อนข้างคงที่
-        safe_label = "".join(c for c in rune_label if c.isalnum()) # เอาเฉพาะตัวอักษร/เลข
-        super().__init__(label=rune_label, style=discord.ButtonStyle.secondary, custom_id=f"bid_rune_{safe_label[:50]}") # จำกัดความยาว custom_id
+    def __init__(self, rune_label: str, cog_instance, *, disabled: bool = False):
+        safe_label = "".join(c for c in rune_label if c.isalnum())
+        super().__init__(label=rune_label, style=discord.ButtonStyle.secondary, custom_id=f"bid_rune_{safe_label[:50]}", disabled=disabled)
         self.rune_label = rune_label
-        self.cog = cog_instance # เก็บ reference Cog ไว้
+        self.cog = cog_instance
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer() # Defer ทันทีเพื่อป้องกัน timeout
+        if self.cog.is_paused:
+            await interaction.response.send_message("Bidding is currently paused. // ระบบประมูลกำลังหยุดชั่วคราว", ephemeral=True)
+            return
+
+        await interaction.response.defer()
         user = interaction.user
         current_timestamp = int(time.time())
         await self.cog.add_or_update_bid(self.rune_label, user, current_timestamp)
-        # ส่ง View ปัจจุบันไปด้วย
-        await self.cog.update_bidding_message(interaction=interaction, view=self.view, is_interaction_edit=True)
+        # <<< [แก้ไข] เอา `view=self.view` ออกจากการเรียกฟังก์ชัน
+        await self.cog.update_bidding_message(interaction=interaction, is_interaction_edit=True)
 
 
 class ClearBidsButton(Button):
-    def __init__(self, cog_instance):
-        super().__init__(label="Clear My Bids", style=discord.ButtonStyle.primary, custom_id="bid_clear_my")
+    def __init__(self, cog_instance, *, disabled: bool = False):
+        super().__init__(label="Clear My Bids", style=discord.ButtonStyle.primary, custom_id="bid_clear_my", disabled=disabled)
         self.cog = cog_instance
 
     async def callback(self, interaction: discord.Interaction):
+        if self.cog.is_paused:
+            await interaction.response.send_message("Bidding is currently paused. // ระบบประมูลกำลังหยุดชั่วคราว", ephemeral=True)
+            return
+
         await interaction.response.defer()
         user = interaction.user
         await self.cog.clear_user_bids(user)
-        await self.cog.update_bidding_message(interaction=interaction, view=self.view, is_interaction_edit=True)
+        # <<< [แก้ไข] เอา `view=self.view` ออกจากการเรียกฟังก์ชัน
+        await self.cog.update_bidding_message(interaction=interaction, is_interaction_edit=True)
 
 
 class DoneBiddingButton(Button):
-    def __init__(self, cog_instance):
-        super().__init__(label="Done Bidding", style=discord.ButtonStyle.success, custom_id="bid_done")
+    def __init__(self, cog_instance, *, disabled: bool = False):
+        super().__init__(label="Done Bidding", style=discord.ButtonStyle.success, custom_id="bid_done", disabled=disabled)
         self.cog = cog_instance
 
     async def callback(self, interaction: discord.Interaction):
+        ## <<< [เพิ่ม] ตรวจสอบสถานะ pause ก่อนทำงาน
+        if self.cog.is_paused:
+            await interaction.response.send_message("Bidding is currently paused. // ระบบประมูลกำลังหยุดชั่วคราว", ephemeral=True)
+            return
+
         user = interaction.user
-        # หาการ์ดที่ user ประมูลไว้และ *ยังไม่* กด done
+        # หารูนที่ user ประมูลไว้และ *ยังไม่* กด done
         user_bids_runes = self.cog.get_user_active_bid_runes(user)
 
         if not user_bids_runes:
@@ -92,14 +105,14 @@ class DoneBiddingButton(Button):
             await self.cog.mark_bids_done(user, selected_runes)
 
             # Send confirmation via followup for the select interaction
-            await select_interaction.followup.send(f"Marked bids for {', '.join(selected_runes)} as done. Please refresh the main message if needed.", ephemeral=True)
+            await select_interaction.followup.send(f"Marked bids for {', '.join(selected_runes)} as done. Please refresh the main message if needed. // ทำการตั้งค่าการประมูล {', '.join(selected_runes)} เป็นเสร็จสิ้นเรียบร้อย กรุณากดปุ่มรีเฟรชที่ข้อความหลักหากจำเป็น ขอบคุณครับ❤️", ephemeral=True)
 
             # --- พยายามอัปเดตข้อความหลัก ---
             # หา View หลัก (view ของปุ่ม Done Bidding) จาก interaction เดิมของปุ่ม
             original_view = self.view
             try:
                 # พยายาม fetch ข้อความหลักมาแก้ไขโดยตรง (น่าเชื่อถือกว่า interaction เดิม)
-                await self.cog.update_bidding_message(view=original_view, is_interaction_edit=False)
+                await self.cog.update_bidding_message(is_interaction_edit=False)
             except Exception as e:
                 log.warning(f"ไม่สามารถอัปเดตข้อความหลักอัตโนมัติหลัง 'Done': {e}")
 
@@ -123,7 +136,7 @@ class RestartButton(Button):
         await interaction.response.defer() # Defer ก่อนเคลียร์ข้อมูล
         await self.cog.restart_bidding()
         # ส่ง view ไปด้วย เพราะการ restart ต้องสร้าง view ใหม่ (หรือใช้ view เดิมก็ได้ถ้าปุ่มไม่เปลี่ยน)
-        await self.cog.update_bidding_message(interaction=interaction, view=self.view, is_restart=True, is_interaction_edit=True)
+        await self.cog.update_bidding_message(interaction=interaction, is_restart=True, is_interaction_edit=True)
 
 
 class RefreshButton(Button):
@@ -133,70 +146,93 @@ class RefreshButton(Button):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        # แค่อัปเดตข้อความ ไม่ต้องทำอะไรกับข้อมูล
-        await self.cog.update_bidding_message(interaction=interaction, view=self.view, is_interaction_edit=True)
+        # <<< [แก้ไข] เอา `view=self.view` ออกจากการเรียกฟังก์ชัน
+        await self.cog.update_bidding_message(interaction=interaction, is_interaction_edit=True)
 
 
 class BiddingView(View):
     # ทำให้ View สามารถถูกสร้างใหม่ได้ง่าย และจัดการปุ่มต่างๆ
-    def __init__(self, cog_instance, timeout=None): # รับ Cog instance
+    ## <<< [แก้ไข] รับ is_paused เพื่อกำหนดสถานะปุ่ม
+    def __init__(self, cog_instance, *, is_paused: bool = False, timeout=None):
         super().__init__(timeout=timeout)
-        self.cog = cog_instance # เก็บ cog instance ไว้เพื่อให้ button เข้าถึงได้
+        self.cog = cog_instance
 
-        # เพิ่มปุ่ม Refresh ก่อน (อาจจะไว้แถวแรก)
+        # ปุ่มที่ทุกคนใช้ได้ แต่จะถูก disable ตอน pause
+        is_action_disabled = is_paused
+
+        # เพิ่มปุ่ม Refresh ก่อน (ปุ่มนี้ไม่ควร disable)
         self.add_item(RefreshButton(cog_instance=self.cog))
 
-        # เพิ่มปุ่มการ์ด (อาจจะต้องแบ่งเป็นหลายแถวถ้าเยอะ)
-        # ตัวอย่าง: แบ่ง 5 ปุ่มต่อแถว
-        row_num = 0
-        for i, rune in enumerate(BIDDING_RUNES):
-             # Discord จำกัด 5 ปุ่มต่อ 1 แถว (Row)
-             # การสร้าง Row แบบ Dynamic อาจซับซ้อน, แบบง่ายคือใส่ปุ่มไปเรื่อยๆ View จะจัดให้เอง
-             self.add_item(RuneButton(rune_label=rune, cog_instance=self.cog))
-             # if i > 0 and i % 5 == 0: # เริ่มแถวใหม่ทุก 5 ปุ่ม (ไม่จำเป็น View จัดการให้ได้)
-             #    row_num += 1
+        # เพิ่มปุ่มรูน
+        for rune in BIDDING_RUNES:
+             self.add_item(RuneButton(rune, self.cog, disabled=is_action_disabled))
 
-        # เพิ่มปุ่มจัดการ (ควรจัดเรียงในแถวใหม่ หรือตามต้องการ)
-        # View จะจัดปุ่มเหล่านี้ต่อจากปุ่มการ์ด
-        self.add_item(ClearBidsButton(cog_instance=self.cog))
-        self.add_item(DoneBiddingButton(cog_instance=self.cog))
-        self.add_item(RestartButton(cog_instance=self.cog))
+        # เพิ่มปุ่มจัดการ (บางปุ่มจะ disable ตอน pause)
+        self.add_item(ClearBidsButton(self.cog, disabled=is_action_disabled))
+        self.add_item(DoneBiddingButton(self.cog, disabled=is_action_disabled))
+        # ปุ่ม Restart สำหรับ Admin ไม่ต้อง disable
+        self.add_item(RestartButton(self.cog))
 
 # --- คลาส Cog หลัก ---
 class BiddingCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # โหลดข้อมูลการประมูลเริ่มต้น (ถ้ามี) หรือสร้างใหม่
-        # TODO: Implement loading/saving bid data from a file/database
         self.rune_bids: BiddingDataType = {rune: [] for rune in BIDDING_RUNES}
-        self.rune_bid_order: List[str] = [] # ลำดับการ์ดที่มีการประมูลครั้งแรก
-        # โหลด ID ข้อความล่าสุด (ถ้ามี)
-        # TODO: Implement loading/saving bidding_message_id
+        self.rune_bid_order: List[str] = []
         self.bidding_message_id: Optional[int] = None
         self.bidding_channel_id: int = BIDDING_CHANNEL_ID
-        self.persistent_view_added = False # Flag ป้องกันการ add view ซ้ำซ้อน
-        self.message_lock = asyncio.Lock() # Lock สำหรับป้องกัน race condition ตอนอัปเดตข้อความ
+        self.persistent_view_added = False
+        self.message_lock = asyncio.Lock()
+        self.is_paused: bool = False ## <<< [เพิ่ม] สถานะสำหรับ Pause/Resume
         log.info(f"BiddingCog: โหลดสำเร็จ จัดการประมูลสำหรับช่อง ID: {self.bidding_channel_id}")
 
     # --- Listener สำหรับ View แบบถาวร ---
     @commands.Cog.listener()
     async def on_ready(self):
-        # ทำเมื่อบอทเชื่อมต่อสำเร็จ (อาจถูกเรียกหลายครั้ง)
         if not self.persistent_view_added:
              log.info("BiddingCog: on_ready - กำลังตรวจสอบ/เพิ่ม Persistent View...")
-             # สร้าง instance ของ View ที่เราต้องการให้ทำงานตลอด
-             persistent_view = BiddingView(cog_instance=self, timeout=None)
-             # ลงทะเบียน View กับบอท; บอทจะจัดการ callback ของปุ่มที่มี custom_id ใน View นี้
+             ## <<< [แก้ไข] ส่งสถานะ is_paused ปัจจุบัน (ซึ่งคือ False ตอนเริ่ม)
+             persistent_view = BiddingView(cog_instance=self, is_paused=self.is_paused, timeout=None)
              self.bot.add_view(persistent_view)
              self.persistent_view_added = True
              log.info("BiddingCog: Persistent View ถูกเพิ่ม/ตรวจสอบแล้ว")
-             # TODO: โหลด bidding_message_id จากที่บันทึกไว้
-             # self.bidding_message_id = load_saved_message_id()
              if self.bidding_message_id:
                   log.info(f"พบ Bidding Message ID ที่บันทึกไว้: {self.bidding_message_id}")
-                  # อาจจะ fetch ข้อความมาตรวจสอบสถานะ หรืออัปเดต view ถ้าจำเป็น
              else:
                   log.warning("ไม่พบ Bidding Message ID ที่บันทึกไว้. อาจต้องใช้ !startbiddingrune เพื่อสร้างใหม่")
+
+
+    ## <<< [เพิ่ม] คำสั่ง !pause
+    @commands.command(name="pause")
+    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
+    async def pause_bidding(self, ctx: commands.Context):
+        """Pauses the bidding. Disables bidding buttons. (Admin only)"""
+        if self.is_paused:
+            await ctx.send("Bidding is already paused.", ephemeral=True)
+            return
+
+        self.is_paused = True
+        log.info(f"--- Bidding PAUSED by {ctx.author.name} ---")
+        await ctx.send("Bidding has been paused. Buttons will be disabled.", ephemeral=True)
+        # อัปเดตข้อความหลักเพื่อแสดงสถานะและปิดปุ่ม
+        await self.update_bidding_message()
+
+    ## <<< [เพิ่ม] คำสั่ง !resume
+    @commands.command(name="resume")
+    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
+    async def resume_bidding(self, ctx: commands.Context):
+        """Resumes the bidding. Re-enables bidding buttons. (Admin only)"""
+        if not self.is_paused:
+            await ctx.send("Bidding is not currently paused.", ephemeral=True)
+            return
+
+        self.is_paused = False
+        log.info(f"--- Bidding RESUMED by {ctx.author.name} ---")
+        await ctx.send("Bidding has been resumed. Buttons will be re-enabled.", ephemeral=True)
+        # อัปเดตข้อความหลักเพื่อเอาสถานะออกและเปิดปุ่ม
+        await self.update_bidding_message()
 
 
     # --- Command สำหรับเริ่ม/สร้างข้อความประมูล ---
@@ -210,16 +246,9 @@ class BiddingCog(commands.Cog):
             await ctx.send("ไม่พบช่องข้อความที่ถูกต้องสำหรับส่งข้อความประมูล", ephemeral=True)
             return
 
-        # --- อ่าน User Guide จากไฟล์ ---
-        user_guide = self._get_user_guide() # เรียกใช้เมธอดที่แก้ไขแล้ว
-        # -----------------------------
-        if "# Error" in user_guide: # ตรวจสอบว่าโหลด guide สำเร็จไหม
+        user_guide = self._get_user_guide()
+        if "# Error" in user_guide:
              await ctx.send(f"คำเตือน: ไม่สามารถโหลด User Guide ได้\n{user_guide}", ephemeral=True)
-             # อาจจะถามยืนยันว่าจะสร้างข้อความประมูลต่อไหม
-             # view_confirm = ConfirmView(ctx.author.id)
-             # await ctx.send("Proceed without user guide?", view=view_confirm, ephemeral=True)
-             # await view_confirm.wait()
-             # if not view_confirm.confirmed: return
 
         try:
             await target_channel.send(user_guide)
@@ -228,15 +257,13 @@ class BiddingCog(commands.Cog):
              return
         except discord.HTTPException as e:
             await ctx.send(f"เกิดข้อผิดพลาดในการส่ง User Guide: {e}", ephemeral=True)
-            # อาจจะไม่หยุดถ้าส่ง guide ไม่ได้ แต่แจ้งเตือน
 
         # สร้าง View และส่งข้อความหลัก
-        # ต้องสร้าง View instance ใหม่ทุกครั้งที่ส่งข้อความใหม่
-        view = BiddingView(cog_instance=self, timeout=None) # View แบบถาวร
+        ## <<< [แก้ไข] ส่งสถานะ is_paused ไปยัง View ตอนสร้าง
+        view = BiddingView(cog_instance=self, is_paused=self.is_paused, timeout=None)
         initial_content = "Choose a rune to bid on:"
         try:
             msg = await target_channel.send(initial_content, view=view)
-            # ลบข้อความเก่า (ถ้ามี ID เดิม) - Optional
             if self.bidding_message_id:
                  try:
                      old_msg = await target_channel.fetch_message(self.bidding_message_id)
@@ -249,10 +276,8 @@ class BiddingCog(commands.Cog):
                  except Exception as e:
                      log.warning(f"เกิดข้อผิดพลาดขณะลบข้อความเก่า: {e}")
 
-            self.bidding_message_id = msg.id # <<< เก็บ ID ของข้อความที่สร้างใหม่
+            self.bidding_message_id = msg.id
             log.info(f"สร้างข้อความประมูลใหม่ ID: {self.bidding_message_id} ในช่อง {target_channel.id}")
-            # TODO: ควรบันทึก bidding_message_id ลงไฟล์/ฐานข้อมูล ณ จุดนี้
-            # save_message_id(self.bidding_message_id)
             await ctx.send(f"สร้างข้อความประมูลเรียบร้อยใน {target_channel.mention} (ID: {msg.id})", ephemeral=True)
         except discord.Forbidden:
              await ctx.send(f"ไม่มีสิทธิ์ส่งข้อความพร้อม View ในช่อง {target_channel.mention}", ephemeral=True)
@@ -291,17 +316,16 @@ class BiddingCog(commands.Cog):
 
     # --- Methods สำหรับจัดการข้อมูลการประมูล ---
     async def add_or_update_bid(self, rune_label: str, user: discord.User | discord.Member, timestamp: int):
-        """เพิ่มหรืออัปเดตการประมูลของผู้ใช้สำหรับการ์ดที่ระบุ"""
+        """เพิ่มหรืออัปเดตการประมูลของผู้ใช้สำหรับรูนที่ระบุ"""
         async with self.message_lock: # ล็อคก่อนแก้ไขข้อมูล bid
             if rune_label not in self.rune_bids:
-                log.warning(f"พยายามประมูลการ์ดที่ไม่รู้จัก: {rune_label}")
+                log.warning(f"พยายามประมูลรูนที่ไม่รู้จัก: {rune_label}")
                 return
 
             bids_for_rune = self.rune_bids[rune_label]
             user_id = user.id
-            # พยายามดึง Member object เพื่อเอา Nickname (อาจจะไม่มีถ้า interaction มาจากนอก Guild หรือ Member ออกไปแล้ว)
-            display_name = user.display_name # ใช้ display_name ซึ่งจะ fallback ไปเป็น global name ถ้าไม่มี nick
-            user_global_name = user.global_name or user.name # ใช้ global_name ถ้ามี (สำหรับบอทที่มีชื่อ global)
+            display_name = user.display_name
+            user_global_name = user.global_name or user.name
 
             existing_bid_index = next((i for i, bid in enumerate(bids_for_rune) if bid['user_id'] == user_id), -1)
 
@@ -324,8 +348,6 @@ class BiddingCog(commands.Cog):
                 log.info(f"เพิ่มการประมูลใหม่: {display_name} ({user_id}) สำหรับ {rune_label} จำนวน 1")
                 if rune_label not in self.rune_bid_order:
                     self.rune_bid_order.append(rune_label)
-            # TODO: Save bid data after modification
-            # self.save_bid_data()
 
     async def clear_user_bids(self, user: discord.User):
         """ลบการประมูลทั้งหมดของผู้ใช้ที่ระบุ"""
@@ -349,20 +371,17 @@ class BiddingCog(commands.Cog):
 
             if cleared_count > 0:
                 log.info(f"รวมลบการประมูล {cleared_count} รายการสำหรับผู้ใช้: {user.display_name} ({user_id})")
-                # TODO: Save bid data
-                # self.save_bid_data()
             else:
                  log.info(f"ผู้ใช้ {user.display_name} ({user_id}) ไม่มี bid ให้ลบ")
 
 
     def get_user_active_bid_runes(self, user: discord.User) -> List[str]:
-        """คืนค่ารายการการ์ดที่ผู้ใช้มีการประมูลที่ยังไม่ 'done' """
+        """คืนค่ารายการรูนที่ผู้ใช้มีการประมูลที่ยังไม่ 'done' """
         user_id = user.id
-        # ไม่ต้องใช้ lock เพราะแค่ อ่านข้อมูล
         return [rune for rune, bids in self.rune_bids.items() if any(bid['user_id'] == user_id and not bid.get('done', False) for bid in bids)]
 
     async def mark_bids_done(self, user: discord.User, runes_to_mark: List[str]):
-        """ทำเครื่องหมายการประมูลของผู้ใช้สำหรับการ์ดที่ระบุว่าเป็น 'done'"""
+        """ทำเครื่องหมายการประมูลของผู้ใช้สำหรับรูนที่ระบุว่าเป็น 'done'"""
         async with self.message_lock: # ล็อคก่อนแก้ไข
             user_id = user.id
             marked_count = 0
@@ -370,16 +389,13 @@ class BiddingCog(commands.Cog):
             for rune in runes_to_mark:
                 if rune in self.rune_bids:
                     for bid in self.rune_bids[rune]:
-                        # ทำเครื่องหมายเฉพาะ bid ของ user คนนี้ และยังไม่เป็น done
                         if bid['user_id'] == user_id and not bid.get('done', False):
                             bid['done'] = True
                             marked_count += 1
             if marked_count > 0:
-                log.info(f"ทำเครื่องหมาย {marked_count} การประมูลเป็น 'done' สำหรับ {display_name} ({user_id}) ในการ์ด: {', '.join(runes_to_mark)}")
-                # TODO: Save bid data
-                # self.save_bid_data()
+                log.info(f"ทำเครื่องหมาย {marked_count} การประมูลเป็น 'done' สำหรับ {display_name} ({user_id}) ในรูน: {', '.join(runes_to_mark)}")
             else:
-                 log.info(f"ไม่พบ bid ที่ยังไม่ done ของ {display_name} ({user_id}) ในการ์ดที่เลือก: {', '.join(runes_to_mark)}")
+                 log.info(f"ไม่พบ bid ที่ยังไม่ done ของ {display_name} ({user_id}) ในรูนที่เลือก: {', '.join(runes_to_mark)}")
 
 
     async def restart_bidding(self):
@@ -387,38 +403,37 @@ class BiddingCog(commands.Cog):
         async with self.message_lock: # ล็อคขณะรีเซ็ต
             self.rune_bids = {rune: [] for rune in BIDDING_RUNES}
             self.rune_bid_order = []
-            # ไม่ต้องลบ bidding_message_id ที่นี่ เพราะเราจะแก้ไขข้อความเดิม
             log.info("--- ระบบการประมูลถูกรีสตาร์ท (ข้อมูลในหน่วยความจำ) ---")
-            # TODO: Clear saved bid data
-            # self.clear_saved_bid_data()
 
 
     # --- Method สำหรับอัปเดตข้อความประมูล ---
-    async def update_bidding_message(self, interaction: Optional[discord.Interaction] = None, view: Optional[View] = None, msg_to_edit: Optional[discord.Message] = None, is_restart: bool = False, is_interaction_edit: bool = True):
+    ## <<< [แก้ไข] ไม่ต้องรับ view, สร้างใหม่เสมอตามสถานะ is_paused
+    async def update_bidding_message(self, interaction: Optional[discord.Interaction] = None, msg_to_edit: Optional[discord.Message] = None, is_restart: bool = False, is_interaction_edit: bool = True):
         """อัปเดตเนื้อหาข้อความประมูลหลัก (Thread-safe)"""
-        # ใช้ Lock เพื่อป้องกันการอัปเดตข้อความพร้อมกันหลายครั้ง ซึ่งอาจทำให้ข้อมูลไม่ตรงกัน
         async with self.message_lock:
             log.debug(f"Update message triggered by: {'Interaction' if interaction else 'Direct Call'}{' (Restart)' if is_restart else ''}")
+
+            ## <<< [เพิ่ม] สร้าง Prefix ตามสถานะ Pause
+            status_prefix = ""
+            if self.is_paused:
+                status_prefix = "## ⏸️ BIDDING IS CURRENTLY PAUSED ⏸️\n\n"
+
             if is_restart:
-                new_content = "Bidding has been restarted. Choose a rune to bid on:"
+                new_content = status_prefix + "Bidding has been restarted. Choose a rune to bid on:"
             else:
-                # สร้างเนื้อหาจากข้อมูล bid ปัจจุบัน (ที่อยู่ใน lock แล้ว)
                 active_bids_data = {rune: bids for rune, bids in self.rune_bids.items() if bids}
                 if not active_bids_data:
-                    new_content = "No current bids."
+                    new_content = status_prefix + "No current bids."
                 else:
-                    # จัดเรียงการ์ด
                     def sort_key(rune_name):
                         try: order_index = self.rune_bid_order.index(rune_name)
                         except ValueError: order_index = float('inf')
                         return (-len(self.rune_bids.get(rune_name, [])), order_index)
 
                     sorted_runes = sorted(active_bids_data.keys(), key=sort_key)
-                    # สร้างข้อความแสดงผล
                     lines = []
                     for rune in sorted_runes:
                         bids = active_bids_data[rune]
-                        # เรียง bid ภายในตาม timestamp
                         sorted_bids = sorted(bids, key=lambda b: b.get('timestamp', 0))
                         bid_lines = [
                             (f"{idx + 1}. {bid.get('user_mention', 'Unknown User')} "
@@ -427,50 +442,35 @@ class BiddingCog(commands.Cog):
                             for idx, bid in enumerate(sorted_bids)
                         ]
                         lines.append(f"# **{rune}**:\n" + "\n".join(bid_lines))
-                    new_content = "\n\n".join(lines)
-                    # จำกัดความยาวข้อความไม่ให้เกิน 4000 ตัวอักษร (ขีดจำกัดของ Discord Embed Description หรือใกล้เคียง content)
+                    bid_content = "\n\n".join(lines)
+                    new_content = status_prefix + bid_content ## <<< [แก้ไข] เพิ่ม prefix ที่นี่
                     if len(new_content) > 4000:
                          new_content = new_content[:3950] + "\n... (Message too long, truncated)"
                          log.warning("เนื้อหาข้อความประมูลยาวเกินไป ถูกตัดให้สั้นลง")
 
 
-            # หา view ที่จะใช้ (ถ้าไม่ได้ส่งมา ให้สร้างใหม่ หรือใช้ view จาก interaction/message)
-            current_view = view
-            if not current_view:
-                 if interaction and interaction.message:
-                      current_view = View.from_message(interaction.message) # พยายามใช้ View เดิมจากข้อความของ interaction
-                 elif msg_to_edit:
-                      current_view = View.from_message(msg_to_edit) # พยายามใช้ View เดิมจากข้อความที่ส่งมา
-                 else:
-                     # ถ้าไม่มีจริงๆ ค่อยสร้างใหม่ (แต่อาจทำให้ปุ่ม state รีเซ็ตถ้าไม่จัดการดีๆ)
-                     log.warning("ไม่พบ View เดิม กำลังสร้าง BiddingView ใหม่สำหรับ update_bidding_message")
-                     current_view = BiddingView(cog_instance=self, timeout=None)
+            ## <<< [แก้ไข] สร้าง View ใหม่เสมอเพื่อให้สถานะปุ่ม (disabled/enabled) ถูกต้อง
+            current_view = BiddingView(cog_instance=self, is_paused=self.is_paused, timeout=None)
 
-
-            # --- เลือกวิธีแก้ไขข้อความ ---
+            # --- ส่วนที่เหลือของฟังก์ชันเหมือนเดิม ---
             message_edited = False
-            target_message_id = self.bidding_message_id # ใช้ ID ที่เก็บไว้เป็นหลัก
+            target_message_id = self.bidding_message_id
             edit_target = None
 
             if interaction and is_interaction_edit:
-                # ถ้ามี interaction และต้องการแก้ไขผ่าน interaction
                 edit_target = interaction
                 log.debug(f"พยายามแก้ไขผ่าน Interaction: {interaction.id}")
             elif msg_to_edit:
-                 # ถ้าส่ง message object มาให้แก้ไข
                  edit_target = msg_to_edit
                  target_message_id = msg_to_edit.id
                  log.debug(f"พยายามแก้ไขผ่าน Message object: {msg_to_edit.id}")
             elif target_message_id:
-                 # ถ้าไม่มี interaction/message แต่มี ID ที่บันทึกไว้
                  log.debug(f"พยายามแก้ไขผ่าน Message ID ที่บันทึกไว้: {target_message_id}")
-                 # ไม่ต้องทำอะไรตรงนี้ จะไป fetch ใน try ด้านล่าง
                  pass
             else:
                  log.warning("ไม่สามารถอัปเดตข้อความได้: ไม่มี Interaction, Message หรือ Message ID ที่จะใช้แก้ไข")
-                 return # ออกจากฟังก์ชันถ้าไม่มีเป้าหมาย
+                 return
 
-            # --- ทำการแก้ไข ---
             try:
                 if isinstance(edit_target, discord.Interaction):
                     await edit_target.edit_original_response(content=new_content, view=current_view)
@@ -494,14 +494,10 @@ class BiddingCog(commands.Cog):
 
             except discord.NotFound:
                 log.error(f"ไม่พบ Interaction หรือ Message (ID: {target_message_id}) ที่จะแก้ไข อาจถูกลบไปแล้ว")
-                # ถ้าหาข้อความหลักไม่เจอ ควรจะเคลียร์ ID ที่เก็บไว้
                 if target_message_id and target_message_id == self.bidding_message_id:
                     self.bidding_message_id = None
-                    # TODO: Clear saved message ID
-                    # clear_saved_message_id()
                     log.warning("Bidding Message ID ถูกเคลียร์เนื่องจากไม่พบข้อความ")
             except discord.HTTPException as e:
-                # บ่อยครั้งคือ Rate Limit หรือข้อความยาวไป (แม้จะเช็คแล้ว) หรือ permission
                 log.error(f"เกิดข้อผิดพลาด HTTP ขณะอัปเดตข้อความประมูล (ID: {target_message_id}): {e.status} - {e.text}")
             except Exception as e:
                 log.exception(f"เกิดข้อผิดพลาดที่ไม่คาดคิดขณะอัปเดตข้อความประมูล (ID: {target_message_id}): {e}")
@@ -514,50 +510,8 @@ class BiddingCog(commands.Cog):
 async def setup(bot: commands.Bot):
     """Loads the BiddingCog."""
     try:
-        # อาจจะโหลดข้อมูลที่บันทึกไว้ก่อน add cog
-        # saved_data = load_bid_data()
-        # saved_msg_id = load_saved_message_id()
         cog_instance = BiddingCog(bot)
-        # if saved_data: cog_instance.rune_bids = saved_data['bids']; cog_instance.rune_bid_order = saved_data['order']
-        # if saved_msg_id: cog_instance.bidding_message_id = saved_msg_id
         await bot.add_cog(cog_instance)
         log.info("BiddingCog: Setup complete, Cog added to bot.")
     except Exception as e:
         log.exception("BiddingCog: Failed to load Cog.")
-        # raise e # อาจจะ raise เพื่อให้ bot หลักรู้ว่าโหลดไม่สำเร็จ
-
-# --- todo: ฟังก์ชันสำหรับ Save/Load Data (ตัวอย่างง่ายๆ กับไฟล์ JSON) ---
-# import json
-# BID_DATA_FILE = 'bidding_data.json'
-
-# def save_bid_data(self): # ควรเป็น method ใน Cog
-#     async with self.message_lock: # ใช้ lock เดียวกัน
-#         data_to_save = {
-#             'bids': self.rune_bids,
-#             'order': self.rune_bid_order,
-#             'message_id': self.bidding_message_id
-#         }
-#         try:
-#             with open(BID_DATA_FILE, 'w', encoding='utf-8') as f:
-#                 json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-#             log.info(f"บันทึกข้อมูลการประมูลลง {BID_DATA_FILE} สำเร็จ")
-#         except IOError as e:
-#             log.error(f"ไม่สามารถบันทึกข้อมูลการประมูลลง {BID_DATA_FILE}: {e}")
-#         except Exception as e:
-#             log.exception(f"เกิดข้อผิดพลาดขณะบันทึกข้อมูล: {e}")
-
-# def load_bid_data(self): # ควรเป็น method ใน Cog หรือเรียกใน __init__ / setup
-#     try:
-#         if os.path.exists(BID_DATA_FILE):
-#             with open(BID_DATA_FILE, 'r', encoding='utf-8') as f:
-#                 loaded_data = json.load(f)
-#                 self.rune_bids = loaded_data.get('bids', {rune: [] for rune in BIDDING_RUNES})
-#                 self.rune_bid_order = loaded_data.get('order', [])
-#                 self.bidding_message_id = loaded_data.get('message_id', None)
-#                 log.info(f"โหลดข้อมูลการประมูลจาก {BID_DATA_FILE} สำเร็จ")
-#         else:
-#              log.info(f"ไม่พบไฟล์ {BID_DATA_FILE}, เริ่มต้นด้วยข้อมูลว่าง")
-#     except json.JSONDecodeError:
-#          log.error(f"ไฟล์ {BID_DATA_FILE} มีรูปแบบ JSON ไม่ถูกต้อง, เริ่มต้นด้วยข้อมูลว่าง")
-#     except Exception as e:
-#          log.exception(f"เกิดข้อผิดพลาดขณะโหลดข้อมูล: {e}")
