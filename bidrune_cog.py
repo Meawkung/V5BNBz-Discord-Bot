@@ -392,6 +392,46 @@ class BiddingCog(commands.Cog):
         # Send confirmation after the lock is released
         await ctx.send("Bidding has been resumed. Buttons will be re-enabled.", ephemeral=True)
 
+    @commands.command(name="deletebidmessage", aliases=["delbidmsg"])
+    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
+    async def delete_bid_message(self, ctx: commands.Context, message_id: int):
+        """
+        Manually deletes a specific bidding message by its ID. (Admin only)
+        
+        This is useful for cleaning up old messages if the bot loses track of the ID.
+        It will also clear the saved message ID from the bot's state if it matches.
+        """
+        try:
+            # We assume the message is in the same channel as the command is used,
+            # or in the globally configured BIDDING_CHANNEL_ID.
+            channel = self.bot.get_channel(self.bidding_channel_id) or ctx.channel
+            
+            msg_to_delete = await channel.fetch_message(message_id)
+            await msg_to_delete.delete()
+            
+            response = f"✅ Successfully deleted message with ID: `{message_id}`"
+            log.info(f"Admin {ctx.author} manually deleted message ID {message_id}")
+
+            # Also check if this was the active message ID and clear it from our state
+            # to prevent errors.
+            if message_id == self.bidding_message_id:
+                async with self.message_lock:
+                    self.bidding_message_id = None
+                    await self._save_state_nolock()
+                response += "\nℹ️ This was the active bidding message, and its ID has been cleared from the bot's state."
+                log.warning(f"Active bidding message ID {message_id} was cleared by manual deletion.")
+
+            await ctx.send(response, ephemeral=True)
+
+        except discord.NotFound:
+            await ctx.send(f"❌ Error: Could not find a message with the ID `{message_id}` in this channel.", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.send(f"❌ Error: I don't have permission to delete messages in that channel.", ephemeral=True)
+        except discord.HTTPException as e:
+            log.error(f"Error manually deleting message {message_id}: {e}")
+            await ctx.send(f"❌ An HTTP error occurred while trying to delete the message: {e}", ephemeral=True)
+
     @commands.command(name="manualbid", aliases=["mbid", "manual"])
     @commands.has_permissions(administrator=True)
     @commands.guild_only()
@@ -440,43 +480,84 @@ class BiddingCog(commands.Cog):
 
     # --- Command สำหรับเริ่ม/สร้างข้อความประมูล ---
     @commands.command(name="startbiddingrune")
-    @commands.has_permissions(administrator=True) # จำกัดให้ Admin ใช้
-    @commands.guild_only() # ใช้ได้เฉพาะใน Server
+    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
     async def start_bidding(self, ctx: commands.Context, channel: Optional[discord.TextChannel] = None):
-        """สร้างข้อความเริ่มต้นสำหรับการประมูลในช่องที่ระบุ (Admin เท่านั้น)"""
+        """Creates the initial bidding messages in the specified channel (Admin only)."""
         target_channel = channel or ctx.guild.get_channel(self.bidding_channel_id) or ctx.channel
         if not target_channel or not isinstance(target_channel, discord.TextChannel):
-            await ctx.send("ไม่พบช่องข้อความที่ถูกต้องสำหรับส่งข้อความประมูล", ephemeral=True)
+            await ctx.send("Could not find a valid text channel to send the bidding message.", ephemeral=True)
             return
 
+        # --- NEW GUIDE HANDLING LOGIC ---
         user_guide_content = self._get_user_guide()
         if "# Error" in user_guide_content:
-                await ctx.send(f"คำเตือน: ไม่สามารถโหลด User Guide ได้\n{user_guide_content}", ephemeral=True)
-                # We can still proceed, but the admin is warned.
+            await ctx.send(f"Warning: Could not load the user guide.\n{user_guide_content}", ephemeral=True)
+            # We can still proceed, but the admin is warned.
+        else:
+            # Split the guide into parts based on a clear separator
+            # This separator is chosen to split the Thai and English versions
+            guide_parts = user_guide_content.split('---') 
+            
+            for part in guide_parts:
+                part = part.strip() # Remove leading/trailing whitespace
+                if not part: # Skip empty parts
+                    continue
 
-        try:
-            # Create the embed object
-            guide_embed = discord.Embed(
-                title="🔶 Bidding Bot User Guide",
-                description=user_guide_content,
-                color=discord.Color.gold() # You can choose any color, e.g., blue(), gold(), blurple()
-            )
+                if len(part) > 4096:
+                    log.warning(f"A part of the user guide is still over 4096 characters and will be truncated.")
+                    part = part[:4090] + "\n... (Section truncated)"
 
-            # A quick safety check for the embed's own limit (4096 characters)
-            if len(guide_embed.description) > 4096:
-                guide_embed.description = guide_embed.description[:4090] + "\n... (Guide was too long and has been truncated)"
-                log.warning("User guide content exceeds 4096 characters and was truncated for the embed.")
+                try:
+                    guide_embed = discord.Embed(
+                        description=part,
+                        color=discord.Color.gold()
+                    )
+                    await target_channel.send(embed=guide_embed)
+                    log.info(f"Sent a part of the user guide to {target_channel.name}.")
+                except discord.Forbidden:
+                    await ctx.send(f"I don't have permissions to send embeds in {target_channel.mention}.", ephemeral=True)
+                    return # Stop if we can't send the guide
+                except discord.HTTPException as e:
+                    log.error(f"HTTP error sending a guide part: {e}")
+                    await ctx.send(f"An error occurred while sending the guide: {e}", ephemeral=True)
+                    return
 
-            # Send the embed instead of the raw text
-            await target_channel.send(embed=guide_embed)
+        # --- MAIN BIDDING MESSAGE (Existing Logic) ---
+        async with self.message_lock:
+            # Delete old message if it exists
+            if self.bidding_message_id:
+                try:
+                    old_msg = await target_channel.fetch_message(self.bidding_message_id)
+                    await old_msg.delete()
+                    log.info(f"Deleted old bidding message ID: {self.bidding_message_id}")
+                except discord.NotFound:
+                    log.info("Old bidding message not found, skipping deletion.")
+                except discord.Forbidden:
+                    log.warning("No permissions to delete the old bidding message.")
+                except Exception as e:
+                    log.warning(f"Error deleting old message: {e}")
+            
+            # Reset message ID before creating a new one
+            self.bidding_message_id = None 
 
-        except discord.Forbidden:
-                await ctx.send(f"ไม่มีสิทธิ์ส่งข้อความ Embed ในช่อง {target_channel.mention}", ephemeral=True)
-                return # Stop if we can't send the guide
-        except discord.HTTPException as e:
-            log.error(f"เกิดข้อผิดพลาด HTTP ในการส่ง User Guide embed: {e}")
-            await ctx.send(f"เกิดข้อผิดพลาดในการส่ง User Guide: {e}", ephemeral=True)
-            return # Stop on error
+            # Create new message and save state
+            view = BiddingView(cog_instance=self, is_paused=self.is_paused, timeout=None)
+            initial_content = "Choose an item to bid on:"
+            try:
+                msg = await target_channel.send(initial_content, view=view)
+                self.bidding_message_id = msg.id
+                
+                await self._save_state_nolock() # Use nolock since we have the lock
+                
+                log.info(f"Created new bidding message ID: {self.bidding_message_id} in channel {target_channel.id}")
+                await ctx.send(f"Bidding system started in {target_channel.mention} (Message ID: {msg.id})", ephemeral=True)
+            
+            except discord.Forbidden:
+                await ctx.send(f"I don't have permissions to send messages with views in {target_channel.mention}.", ephemeral=True)
+            except discord.HTTPException as e:
+                log.exception(f"HTTP error sending the main bidding message: {e}")
+                await ctx.send(f"An error occurred sending the main bidding message: {e}", ephemeral=True)
 
         # สร้าง View และส่งข้อความหลัก
         ## <<< [แก้ไข] ส่งสถานะ is_paused ไปยัง View ตอนสร้าง
