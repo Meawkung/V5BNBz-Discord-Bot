@@ -376,13 +376,13 @@ class BiddingCog(commands.Cog):
     # --- Methods สำหรับจัดการข้อมูลการประมูล ---
     async def add_or_update_bid(self, rune_label: str, user: discord.User | discord.Member, timestamp: int) -> bool:
         """
-        เพิ่มหรืออัปเดตการประมูลของผู้ใช้สำหรับรูนที่ระบุ
+        Adds a new bid entry for the user. Each call represents one bid.
         Returns:
-            bool: True ถ้าการประมูลสำเร็จ, False ถ้าถึงขีดจำกัดแล้ว
+            bool: True if the bid was added, False if the user reached their bid limit.
         """
-        async with self.message_lock:  # ล็อคก่อนแก้ไขข้อมูล bid
+        async with self.message_lock:  # Lock before modifying bid data
             if rune_label not in self.rune_bids:
-                log.warning(f"พยายามประมูลรูนที่ไม่รู้จัก: {rune_label}")
+                log.warning(f"Attempted bid on unknown rune: {rune_label}")
                 return False
 
             bids_for_rune = self.rune_bids[rune_label]
@@ -390,37 +390,31 @@ class BiddingCog(commands.Cog):
             display_name = user.display_name
             user_global_name = user.global_name or user.name
 
-            existing_bid_index = next((i for i, bid in enumerate(bids_for_rune) if bid['user_id'] == user_id), -1)
+            # --- [NEW LOGIC] ---
+            # Count the number of existing entries for this user on this rune
+            user_bid_count = sum(1 for bid in bids_for_rune if bid['user_id'] == user_id)
 
-            if existing_bid_index != -1:
-                # --- [เงื่อนไขใหม่] ---
-                # ตรวจสอบว่าผู้ใช้ถึงขีดจำกัดการประมูลสำหรับไอเทมนี้แล้วหรือยัง
-                if bids_for_rune[existing_bid_index]['quantity'] >= MAX_BIDS_PER_ITEM:
-                    log.info(f"Bid attempt rejected for {display_name} on {rune_label}. Limit of {MAX_BIDS_PER_ITEM} reached.")
-                    return False  # คืนค่า False เพื่อบอกว่าการประมูลไม่สำเร็จ
+            # Check if they have reached the maximum
+            if user_bid_count >= MAX_BIDS_PER_ITEM:
+                log.info(f"Bid attempt rejected for {display_name} on {rune_label}. Limit of {MAX_BIDS_PER_ITEM} reached.")
+                return False  # Return False to indicate failure
 
-                # ถ้ายังไม่ถึงขีดจำกัด ก็อัปเดตตามปกติ
-                bids_for_rune[existing_bid_index]['quantity'] += 1
-                bids_for_rune[existing_bid_index]['timestamp'] = timestamp
-                bids_for_rune[existing_bid_index]['done'] = False  # การกดปุ่มใหม่ถือว่ายังไม่ done
-                bids_for_rune[existing_bid_index]['user_display_name'] = user_global_name
-                log.info(f"อัปเดตการประมูล: {display_name} ({user_id}) สำหรับ {rune_label} เป็น {bids_for_rune[existing_bid_index]['quantity']}")
-            else:
-                # การประมูลใหม่ (จำนวน = 1) จะไม่เกินขีดจำกัดเสมอ
-                new_bid = {
-                    'user_id': user_id,
-                    'user_mention': user.mention,
-                    'user_display_name': user_global_name,
-                    'quantity': 1,
-                    'timestamp': timestamp,
-                    'done': False
-                }
-                bids_for_rune.append(new_bid)
-                log.info(f"เพิ่มการประมูลใหม่: {display_name} ({user_id}) สำหรับ {rune_label} จำนวน 1")
-                if rune_label not in self.rune_bid_order:
-                    self.rune_bid_order.append(rune_label)
+            # Always add a new bid entry, as each click is a separate bid.
+            new_bid = {
+                'user_id': user_id,
+                'user_mention': user.mention,
+                'user_display_name': user_global_name,
+                'quantity': 1,  # Quantity is always 1 per entry
+                'timestamp': timestamp,
+                'done': False
+            }
+            bids_for_rune.append(new_bid)
+            log.info(f"Added new bid for {display_name} ({user_id}) on {rune_label}. They now have {user_bid_count + 1} bids.")
             
-            return True # คืนค่า True เพื่อบอกว่าการประมูลสำเร็จ
+            if rune_label not in self.rune_bid_order:
+                self.rune_bid_order.append(rune_label)
+            
+            return True # Return True to indicate success
 
     async def clear_user_bids(self, user: discord.User):
         """ลบการประมูลทั้งหมดของผู้ใช้ที่ระบุ"""
@@ -508,15 +502,20 @@ class BiddingCog(commands.Cog):
                     for rune in sorted_runes:
                         bids = active_bids_data[rune]
                         sorted_bids = sorted(bids, key=lambda b: b.get('timestamp', 0))
+                        
+                        # --- [MODIFIED LINE] ---
+                        # Remove the 'quantity' part from the display string
                         bid_lines = [
                             (f"{idx + 1}. {bid.get('user_mention', 'Unknown User')} "
-                             f"({bid.get('user_display_name', '?')}) - {bid.get('quantity', '?')} "
+                             f"({bid.get('user_display_name', '?')}) " # <-- Removed the quantity part here
                              f"<t:{bid.get('timestamp', 0)}:R> {'✅' if bid.get('done', False) else ''}").strip()
                             for idx, bid in enumerate(sorted_bids)
                         ]
+                        # --- [END MODIFIED LINE] ---
+                        
                         lines.append(f"# **{rune}**:\n" + "\n".join(bid_lines))
                     bid_content = "\n\n".join(lines)
-                    new_content = status_prefix + bid_content ## <<< [แก้ไข] เพิ่ม prefix ที่นี่
+                    new_content = status_prefix + bid_content
                     if len(new_content) > 4000:
                          new_content = new_content[:3950] + "\n... (Message too long, truncated)"
                          log.warning("เนื้อหาข้อความประมูลยาวเกินไป ถูกตัดให้สั้นลง")
@@ -580,43 +579,45 @@ class BiddingCog(commands.Cog):
 
     async def manual_add_or_update_bid(self, admin: discord.User, target_user: discord.Member, rune_label: str, quantity: int, timestamp: int):
         """
-        Sets a user's bid count for a specific rune to a specific quantity.
-        This is intended for manual admin actions.
+        Manually sets a user's total bid count by removing their old bids
+        and adding a specific number of new, individual bids.
         """
         async with self.message_lock: # Lock before modifying bid data
             if rune_label not in self.rune_bids:
                 log.warning(f"Manual bid by {admin.name} for {target_user.name} failed: Unknown rune {rune_label}")
                 return
 
-            bids_for_rune = self.rune_bids[rune_label]
             user_id = target_user.id
-            display_name = target_user.display_name
             user_global_name = target_user.global_name or target_user.name
 
-            existing_bid_index = next((i for i, bid in enumerate(bids_for_rune) if bid['user_id'] == user_id), -1)
+            # --- [NEW LOGIC] ---
+            # 1. Remove all existing bids for this user on this specific rune.
+            self.rune_bids[rune_label] = [
+                bid for bid in self.rune_bids[rune_label] if bid['user_id'] != user_id
+            ]
+            log.info(f"Manual bid: Cleared previous bids for {target_user.display_name} on {rune_label}.")
 
-            if existing_bid_index != -1:
-                # User already has a bid, so we update it
-                bids_for_rune[existing_bid_index]['quantity'] = quantity
-                bids_for_rune[existing_bid_index]['timestamp'] = timestamp
-                bids_for_rune[existing_bid_index]['done'] = False # A manual edit resets the 'done' status
-                bids_for_rune[existing_bid_index]['user_display_name'] = user_global_name
-                log.info(f"Manual bid update by {admin.name}: Set {display_name}'s bid for {rune_label} to {quantity}")
-            else:
-                # User does not have a bid, so we create a new one
+            # 2. Add 'quantity' number of new, individual bids.
+            for i in range(quantity):
                 new_bid = {
                     'user_id': user_id,
                     'user_mention': target_user.mention,
                     'user_display_name': user_global_name,
-                    'quantity': quantity,
-                    'timestamp': timestamp,
+                    'quantity': 1, # Each entry has a quantity of 1
+                    'timestamp': timestamp + i, # Add a tiny offset to maintain order if needed
                     'done': False
                 }
-                bids_for_rune.append(new_bid)
-                log.info(f"Manual bid added by {admin.name}: Created bid for {display_name} on {rune_label} with quantity {quantity}")
-                # Ensure the rune is in the display order
-                if rune_label not in self.rune_bid_order:
-                    self.rune_bid_order.append(rune_label)
+                self.rune_bids[rune_label].append(new_bid)
+
+            log.info(f"Manual bid by {admin.name}: Set {target_user.display_name}'s total bids for {rune_label} to {quantity}")
+            
+            # Ensure the rune is in the display order if it wasn't already
+            if quantity > 0 and rune_label not in self.rune_bid_order:
+                self.rune_bid_order.append(rune_label)
+            # Remove from order if bids are set to 0 and no one else is bidding
+            elif quantity == 0 and not self.rune_bids[rune_label]:
+                 if rune_label in self.rune_bid_order:
+                     self.rune_bid_order.remove(rune_label)
 
 
 # --- ฟังก์ชัน Setup สำหรับ Cog ---
