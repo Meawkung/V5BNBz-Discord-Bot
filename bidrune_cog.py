@@ -392,6 +392,65 @@ class BiddingCog(commands.Cog):
         # Send confirmation after the lock is released
         await ctx.send("Bidding has been resumed. Buttons will be re-enabled.", ephemeral=True)
 
+    @commands.command(name="clearbids", aliases=["cbids", "removebids"])
+    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
+    async def clear_bids_for_user(self, ctx: commands.Context, user: discord.Member, item_name: Optional[str] = None):
+        """
+        Manually clears bids for a specified user. (Admin only)
+        
+        Usage:
+        - To clear ALL bids for a user: !clearbids @User
+        - To clear bids for a user on a SPECIFIC item: !clearbids @User "Item Name"
+        """
+        # Acknowledge the command, showing "Bot is thinking..." to the admin only.
+        await ctx.defer(ephemeral=True)
+
+        total_cleared_count = 0
+        
+        if item_name:
+            # --- Clear bids for a specific item ---
+            clean_item_name = item_name.strip()
+            if clean_item_name not in BIDDING_RUNES:
+                # --- FIX: Use ctx.send ---
+                await ctx.send(
+                    f"❌ Invalid item name: `{clean_item_name}`.\n"
+                    f"Valid items are: `{'`, `'.join(BIDDING_RUNES)}`",
+                    ephemeral=True
+                )
+                return
+
+            async with self.message_lock:
+                bids_for_item = self.rune_bids.get(clean_item_name, [])
+                initial_len = len(bids_for_item)
+                
+                self.rune_bids[clean_item_name] = [bid for bid in bids_for_item if bid['user_id'] != user.id]
+                
+                total_cleared_count = initial_len - len(self.rune_bids[clean_item_name])
+                
+                log.info(f"Admin {ctx.author.name} cleared {total_cleared_count} bids for {user.display_name} on item: {clean_item_name}.")
+                
+                if not self.rune_bids[clean_item_name] and clean_item_name in self.rune_bid_order:
+                    try:
+                        self.rune_bid_order.remove(clean_item_name)
+                    except ValueError:
+                        pass
+                
+                await self._save_state_nolock()
+            
+            # --- FIX: Use ctx.send ---
+            await ctx.send(f"✅ Cleared {total_cleared_count} bid(s) for **{user.display_name}** on **{clean_item_name}**.", ephemeral=True)
+
+        else:
+            # --- Clear ALL bids for the user ---
+            total_cleared_count = await self.clear_user_bids(user)
+            # --- FIX: Use ctx.send ---
+            await ctx.send(f"✅ Cleared all {total_cleared_count} bid(s) for **{user.display_name}** across all items.", ephemeral=True)
+
+        # Update the main message to reflect the changes
+        if total_cleared_count > 0:
+            await self.update_bidding_message()
+
     @commands.command(name="deletebidmessage", aliases=["delbidmsg"])
     @commands.has_permissions(administrator=True)
     @commands.guild_only()
