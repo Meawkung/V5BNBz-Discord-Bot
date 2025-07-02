@@ -358,14 +358,19 @@ class BiddingCog(commands.Cog):
             await ctx.send("Bidding is already paused.", ephemeral=True)
             return
 
-        self.is_paused = True
-        log.info(f"--- Bidding PAUSED by {ctx.author.name} ---")
-        await ctx.send("Bidding has been paused. Buttons will be disabled.", ephemeral=True)
-        # อัปเดตข้อความหลักเพื่อแสดงสถานะและปิดปุ่ม
-        await self.update_bidding_message()
-        await self._save_state()  # <<< SAVE THE CHANGES
+        # Acquire the lock for the entire transaction
+        async with self.message_lock:
+            self.is_paused = True
+            log.info(f"--- Bidding PAUSED by {ctx.author.name} ---")
 
-    ## <<< [เพิ่ม] คำสั่ง !resume
+            # Call the nolock versions since we already hold the lock
+            await self.update_bidding_message_nolock()
+            await self._save_state_nolock()
+
+        # Send confirmation after the lock is released
+        await ctx.send("Bidding has been paused. Buttons will be disabled.", ephemeral=True)
+
+
     @commands.command(name="resume")
     @commands.has_permissions(administrator=True)
     @commands.guild_only()
@@ -375,12 +380,17 @@ class BiddingCog(commands.Cog):
             await ctx.send("Bidding is not currently paused.", ephemeral=True)
             return
 
-        self.is_paused = False
-        log.info(f"--- Bidding RESUMED by {ctx.author.name} ---")
+        # Acquire the lock for the entire transaction
+        async with self.message_lock:
+            self.is_paused = False
+            log.info(f"--- Bidding RESUMED by {ctx.author.name} ---")
+
+            # Call the nolock versions since we already hold the lock
+            await self.update_bidding_message_nolock()
+            await self._save_state_nolock()
+
+        # Send confirmation after the lock is released
         await ctx.send("Bidding has been resumed. Buttons will be re-enabled.", ephemeral=True)
-        # อัปเดตข้อความหลักเพื่อเอาสถานะออกและเปิดปุ่ม
-        await self.update_bidding_message()
-        await self._save_state()  # <<< SAVE THE CHANGES
 
     @commands.command(name="manualbid", aliases=["mbid", "manual"])
     @commands.has_permissions(administrator=True)
@@ -647,106 +657,94 @@ class BiddingCog(commands.Cog):
     # --- Method สำหรับอัปเดตข้อความประมูล ---
     ## <<< [แก้ไข] ไม่ต้องรับ view, สร้างใหม่เสมอตามสถานะ is_paused
     async def update_bidding_message(self, interaction: Optional[discord.Interaction] = None, msg_to_edit: Optional[discord.Message] = None, is_restart: bool = False, is_interaction_edit: bool = True):
-        """อัปเดตเนื้อหาข้อความประมูลหลัก (Thread-safe)"""
+        """Acquires the lock and updates the bidding message."""
         async with self.message_lock:
-            log.debug(f"Update message triggered by: {'Interaction' if interaction else 'Direct Call'}{' (Restart)' if is_restart else ''}")
+            await self.update_bidding_message_nolock(
+                interaction=interaction,
+                msg_to_edit=msg_to_edit,
+                is_restart=is_restart,
+                is_interaction_edit=is_interaction_edit
+            )
 
-            ## <<< [เพิ่ม] สร้าง Prefix ตามสถานะ Pause
-            status_prefix = ""
-            if self.is_paused:
-                status_prefix = "## ⏸️ BIDDING IS CURRENTLY PAUSED ⏸️\n\n"
+    async def update_bidding_message_nolock(self, interaction: Optional[discord.Interaction] = None, msg_to_edit: Optional[discord.Message] = None, is_restart: bool = False, is_interaction_edit: bool = True):
+        """Updates the bidding message content. ASSUMES a lock is already held."""
+        log.debug(f"Update message (nolock) triggered by: {'Interaction' if interaction else 'Direct Call'}{' (Restart)' if is_restart else ''}")
 
-            if is_restart:
-                new_content = status_prefix + "Bidding has been restarted. Choose a rune to bid on:"
+        status_prefix = ""
+        if self.is_paused:
+            status_prefix = "## ⏸️ BIDDING IS CURRENTLY PAUSED ⏸️\n\n"
+
+        if is_restart:
+            new_content = status_prefix + "Bidding has been restarted. Choose a rune to bid on:"
+        else:
+            active_bids_data = {rune: bids for rune, bids in self.rune_bids.items() if bids}
+            if not active_bids_data:
+                new_content = status_prefix + "No current bids."
             else:
-                active_bids_data = {rune: bids for rune, bids in self.rune_bids.items() if bids}
-                if not active_bids_data:
-                    new_content = status_prefix + "No current bids."
-                else:
-                    def sort_key(rune_name):
-                        try: order_index = self.rune_bid_order.index(rune_name)
-                        except ValueError: order_index = float('inf')
-                        return (-len(self.rune_bids.get(rune_name, [])), order_index)
+                def sort_key(rune_name):
+                    try: order_index = self.rune_bid_order.index(rune_name)
+                    except ValueError: order_index = float('inf')
+                    return (-len(self.rune_bids.get(rune_name, [])), order_index)
 
-                    sorted_runes = sorted(active_bids_data.keys(), key=sort_key)
-                    lines = []
-                    for rune in sorted_runes:
-                        bids = active_bids_data[rune]
-                        sorted_bids = sorted(bids, key=lambda b: b.get('timestamp', 0))
-                        
-                        # --- [MODIFIED LINE] ---
-                        # Remove the 'quantity' part from the display string
-                        bid_lines = [
-                            (f"{idx + 1}. {bid.get('user_mention', 'Unknown User')} "
-                             f"({bid.get('user_display_name', '?')}) " # <-- Removed the quantity part here
-                             f"<t:{bid.get('timestamp', 0)}:R> {'✅' if bid.get('done', False) else ''}").strip()
-                            for idx, bid in enumerate(sorted_bids)
-                        ]
-                        # --- [END MODIFIED LINE] ---
-                        
-                        lines.append(f"# **{rune}**:\n" + "\n".join(bid_lines))
-                    bid_content = "\n\n".join(lines)
-                    new_content = status_prefix + bid_content
-                    if len(new_content) > 4000:
-                         new_content = new_content[:3950] + "\n... (Message too long, truncated)"
-                         log.warning("เนื้อหาข้อความประมูลยาวเกินไป ถูกตัดให้สั้นลง")
+                sorted_runes = sorted(active_bids_data.keys(), key=sort_key)
+                lines = []
+                for rune in sorted_runes:
+                    bids = active_bids_data[rune]
+                    sorted_bids = sorted(bids, key=lambda b: b.get('timestamp', 0))
+                    bid_lines = [
+                        (f"{idx + 1}. {bid.get('user_mention', 'Unknown User')} "
+                         f"({bid.get('user_display_name', '?')}) "
+                         f"<t:{bid.get('timestamp', 0)}:R> {'✅' if bid.get('done', False) else ''}").strip()
+                        for idx, bid in enumerate(sorted_bids)
+                    ]
+                    lines.append(f"# **{rune}**:\n" + "\n".join(bid_lines))
+                bid_content = "\n\n".join(lines)
+                new_content = status_prefix + bid_content
+                if len(new_content) > 4000:
+                     new_content = new_content[:3950] + "\n... (Message too long, truncated)"
+                     log.warning("เนื้อหาข้อความประมูลยาวเกินไป ถูกตัดให้สั้นลง")
 
+        current_view = BiddingView(cog_instance=self, is_paused=self.is_paused, timeout=None)
 
-            ## <<< [แก้ไข] สร้าง View ใหม่เสมอเพื่อให้สถานะปุ่ม (disabled/enabled) ถูกต้อง
-            current_view = BiddingView(cog_instance=self, is_paused=self.is_paused, timeout=None)
+        message_edited = False
+        target_message_id = self.bidding_message_id
+        edit_target = None
 
-            # --- ส่วนที่เหลือของฟังก์ชันเหมือนเดิม ---
-            message_edited = False
-            target_message_id = self.bidding_message_id
-            edit_target = None
+        if interaction and is_interaction_edit:
+            edit_target = interaction
+        elif msg_to_edit:
+             edit_target = msg_to_edit
+             target_message_id = msg_to_edit.id
+        elif not target_message_id:
+             log.warning("Cannot update message (nolock): No interaction, message, or ID.")
+             return
 
-            if interaction and is_interaction_edit:
-                edit_target = interaction
-                log.debug(f"พยายามแก้ไขผ่าน Interaction: {interaction.id}")
-            elif msg_to_edit:
-                 edit_target = msg_to_edit
-                 target_message_id = msg_to_edit.id
-                 log.debug(f"พยายามแก้ไขผ่าน Message object: {msg_to_edit.id}")
+        try:
+            if isinstance(edit_target, discord.Interaction):
+                await edit_target.edit_original_response(content=new_content, view=current_view)
+                message_edited = True
+            elif isinstance(edit_target, discord.Message):
+                await edit_target.edit(content=new_content, view=current_view)
+                message_edited = True
             elif target_message_id:
-                 log.debug(f"พยายามแก้ไขผ่าน Message ID ที่บันทึกไว้: {target_message_id}")
-                 pass
-            else:
-                 log.warning("ไม่สามารถอัปเดตข้อความได้: ไม่มี Interaction, Message หรือ Message ID ที่จะใช้แก้ไข")
-                 return
-
-            try:
-                if isinstance(edit_target, discord.Interaction):
-                    await edit_target.edit_original_response(content=new_content, view=current_view)
+                channel = self.bot.get_channel(self.bidding_channel_id) or await self.bot.fetch_channel(self.bidding_channel_id)
+                if channel and isinstance(channel, discord.TextChannel):
+                    msg = await channel.fetch_message(target_message_id)
+                    await msg.edit(content=new_content, view=current_view)
                     message_edited = True
-                    log.info(f"อัปเดตข้อความประมูลผ่าน Interaction {edit_target.id} สำเร็จ")
-                elif isinstance(edit_target, discord.Message):
-                    await edit_target.edit(content=new_content, view=current_view)
-                    message_edited = True
-                    log.info(f"อัปเดตข้อความประมูลผ่าน Message {edit_target.id} สำเร็จ")
-                elif target_message_id: # กรณีต้อง fetch
-                    channel = self.bot.get_channel(self.bidding_channel_id) or await self.bot.fetch_channel(self.bidding_channel_id)
-                    if channel and isinstance(channel, discord.TextChannel):
-                        msg = await channel.fetch_message(target_message_id)
-                        await msg.edit(content=new_content, view=current_view)
-                        message_edited = True
-                        log.info(f"อัปเดตข้อความประมูลผ่าน fetch ID {target_message_id} สำเร็จ")
-                    elif not channel:
-                         log.error(f"ไม่พบช่อง ID {self.bidding_channel_id} สำหรับ fetch message")
-                    else:
-                         log.error(f"ช่อง ID {self.bidding_channel_id} ไม่ใช่ TextChannel")
+        except discord.NotFound:
+            log.error(f"Cannot update message (nolock): Not Found (ID: {target_message_id})")
+            if target_message_id and target_message_id == self.bidding_message_id:
+                self.bidding_message_id = None
+        except discord.HTTPException as e:
+            log.error(f"HTTP error updating message (nolock) (ID: {target_message_id}): {e.status} - {e.text}")
+        except Exception as e:
+            log.exception(f"Unexpected error updating message (nolock) (ID: {target_message_id}): {e}")
 
-            except discord.NotFound:
-                log.error(f"ไม่พบ Interaction หรือ Message (ID: {target_message_id}) ที่จะแก้ไข อาจถูกลบไปแล้ว")
-                if target_message_id and target_message_id == self.bidding_message_id:
-                    self.bidding_message_id = None
-                    log.warning("Bidding Message ID ถูกเคลียร์เนื่องจากไม่พบข้อความ")
-            except discord.HTTPException as e:
-                log.error(f"เกิดข้อผิดพลาด HTTP ขณะอัปเดตข้อความประมูล (ID: {target_message_id}): {e.status} - {e.text}")
-            except Exception as e:
-                log.exception(f"เกิดข้อผิดพลาดที่ไม่คาดคิดขณะอัปเดตข้อความประมูล (ID: {target_message_id}): {e}")
-
-            if not message_edited:
-                log.warning("การอัปเดตข้อความประมูลล้มเหลว")
+        if message_edited:
+            log.info(f"Successfully updated bidding message (nolock) (ID: {target_message_id or 'unknown'})")
+        else:
+            log.warning("Failed to update bidding message (nolock)")
 
     async def manual_add_or_update_bid(self, admin: discord.User, target_user: discord.Member, rune_label: str, quantity: int, timestamp: int):
         """

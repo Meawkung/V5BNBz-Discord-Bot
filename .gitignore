@@ -163,3 +163,5 @@ cython_debug/
 logged/
 # Temporary files
 temp_tts/
+
+bidding_state.json
