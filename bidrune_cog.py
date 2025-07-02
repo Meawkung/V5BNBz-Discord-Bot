@@ -218,10 +218,33 @@ class RestartButton(Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("You do not have permission to restart bidding.", ephemeral=True)
             return
-        await interaction.response.defer() # Defer ก่อนเคลียร์ข้อมูล
-        await self.cog.restart_bidding()
-        # ส่ง view ไปด้วย เพราะการ restart ต้องสร้าง view ใหม่ (หรือใช้ view เดิมก็ได้ถ้าปุ่มไม่เปลี่ยน)
-        await self.cog.update_bidding_message(interaction=interaction, is_restart=True, is_interaction_edit=True)
+
+        # Create the confirmation view
+        confirmation_view = ConfirmRestartView(cog_instance=self.cog)
+
+        # Send the private confirmation message
+        await interaction.response.send_message(
+            "**⚠️ Are you sure you want to restart all bidding?**\nThis will permanently delete all current bids for everyone.",
+            view=confirmation_view,
+            ephemeral=True
+        )
+
+        # Wait for the view to stop (either by button click or timeout)
+        await confirmation_view.wait()
+
+        # --- AFTER the view is done, check if it was confirmed ---
+        if confirmation_view.confirmed:
+            log.info(f"Bidding restart CONFIRMED by {interaction.user.name}")
+            # Now we perform the actual restart
+            await self.cog.restart_bidding()
+            
+            # Update the main message. We can't use the original interaction to edit it,
+            # so we'll do a direct update.
+            await self.cog.update_bidding_message(is_restart=True)
+        else:
+            log.info(f"Bidding restart was cancelled or timed out by {interaction.user.name}")
+            # If not confirmed, we do nothing. The user has already been notified
+            # by the text in the confirmation view's buttons.
 
 
 class RefreshButton(Button):
@@ -257,6 +280,46 @@ class BiddingView(View):
         self.add_item(DoneBiddingButton(cog_instance=self.cog, disabled=is_action_disabled))
         # ปุ่ม Restart สำหรับ Admin ไม่ต้อง disable
         self.add_item(RestartButton(cog_instance=self.cog))
+
+class ConfirmRestartView(View):
+    def __init__(self, cog_instance):
+        super().__init__(timeout=30)  # Short timeout for safety
+        self.cog = cog_instance
+        self.confirmed = False
+
+    @discord.ui.button(label="Confirm Restart", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: Button):
+        # We have confirmed the action
+        self.confirmed = True
+        
+        # Disable buttons to prevent double-clicks
+        for item in self.children:
+            item.disabled = True
+        
+        # Acknowledge the confirmation and then stop the view
+        await interaction.response.edit_message(content="✅ **Confirmed!** Restarting the bidding system...", view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: Button):
+        # We have not confirmed, so just stop the view
+        self.confirmed = False
+
+        # Disable buttons
+        for item in self.children:
+            item.disabled = True
+            
+        await interaction.response.edit_message(content="❌ Restart cancelled.", view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        # If the user waits too long, disable the buttons and inform them
+        for item in self.children:
+            item.disabled = True
+        # We need the original interaction to edit the message on timeout.
+        # This is a bit tricky, so for now, we'll just let it time out visually.
+        # A more advanced implementation would pass the original interaction's message
+        # to the view so it can be edited here.
 
 # --- คลาส Cog หลัก ---
 class BiddingCog(commands.Cog):
